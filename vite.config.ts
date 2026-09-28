@@ -41,6 +41,7 @@ export default defineConfig({
         'net',
         'tls',
         'zlib',
+        'module',
         '@tailwindcss/node',
         '@tailwindcss/oxide',
       ],

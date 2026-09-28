@@ -217,9 +217,6 @@ export function bunAsVite(options: BunAsViteOptions = {}): BunPlugin {
         build.onLoad({ filter: /\.css$/ }, async (args) => {
           let rawCss = await fs.promises.readFile(args.path, 'utf-8');
 
-          // Rewrite relative asset URLs (fonts, background-image, …) to root-relative
-          rawCss = rewriteCssUrls(rawCss, args.path, root);
-
           // Optional transform hook (Tailwind, PostCSS, …)
           if (typeof cssTransform === 'function') {
             try {
@@ -229,6 +226,9 @@ export function bunAsVite(options: BunAsViteOptions = {}): BunPlugin {
               console.error(`[bun-as-vite] CSS transform error (${args.path}):`, err);
             }
           }
+
+          // Rewrite relative asset URLs (fonts, background-image, …) to root-relative
+          rawCss = rewriteCssUrls(rawCss, args.path, root);
 
           // Produce a JS module that injects the CSS as a <style> tag
           const relPath = path.relative(root, args.path);
