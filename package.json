@@ -1,0 +1,70 @@
+{
+  "name": "bun-as-vite",
+  "version": "1.0.0",
+  "description": "Run Vite-configured React and web apps on Bun natively with zero config rewrite. Full drop-in replacement for Vite defineConfig with Bun.build and Bun.serve.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "bun-as-vite": "./bin/bun-as-vite.js",
+    "bav": "./bin/bun-as-vite.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./plugins": {
+      "types": "./dist/plugins/index.d.ts",
+      "import": "./dist/plugins/index.js"
+    },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js"
+    }
+  },
+  "files": [
+    "dist",
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "vite build && tsc --emitDeclarationOnly",
+    "prepublish": "rm -rf ./dist && bun run build",
+    "typecheck": "tsc --noEmit"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "bun",
+    "vite",
+    "defineConfig",
+    "bun-build",
+    "bun-serve",
+    "hmr",
+    "react-refresh",
+    "react-compiler",
+    "proxy",
+    "code-splitting",
+    "tailwindcss"
+  ],
+  "author": "Yathin",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yathink3/bun-as-vite.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yathink3/bun-as-vite/issues"
+  },
+  "homepage": "https://github.com/yathink3/bun-as-vite#readme",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0",
+    "vite": "^8.3.1"
+  }
+}
