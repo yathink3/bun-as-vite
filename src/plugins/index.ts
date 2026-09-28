@@ -1,19 +1,11 @@
-export {
-  bunAsVite,
-  type BunAsViteOptions,
-} from './bun-plugin';
-
-export {
-  createBunConfig,
-  tailwindcss,
-  codeSplitPlugin,
-  type CodeSplitPluginOptions,
-  proxyRedirectsPlugin,
-  type ProxyRedirectsPluginOptions,
-  customConfigPlugin,
-  type CustomConfigPluginOptions,
-  envLoaderPlugin,
-  type EnvLoaderPluginOptions,
-  buildScorerPlugin,
-  wrapPlugin,
-} from './shims';
+export { default as codeSplitPlugin, codeSplitPlugin as codeSplit, type CodeSplitPluginOptions, type CodeSplitGroup } from './codeSplit';
+export { default as proxyRedirectsPlugin, proxyRedirectsPlugin as proxyRedirects, type ProxyRedirectsPluginOptions } from './proxyRedirects';
+export { default as customConfigPlugin, customConfigPlugin as customConfig, type CustomConfigPluginOptions } from './customConfig';
+export { default as envLoaderPlugin, envLoaderPlugin as envLoader, type EnvLoaderPluginOptions } from './envLoader';
+export { default as buildScorerPlugin, buildScorerPlugin as buildScorer, type BuildScorerPluginOptions } from './buildScorer';
+export { default as tailwindcss, type TailwindcssPluginOptions } from './tailwindcss';
+export { default as bunAsVite, bunAsVite as bunPlugin, type BunAsViteOptions } from './bunPlugin';
+export { default as buildLogModifierPlugin, buildLogModifierPlugin as buildLogModifier, type BuildLogModifierOptions } from './buildLogModifier';
+export { default as legacyConfigPlugin, legacyConfigPlugin as legacyConfig } from './legacyConfig';
+export { default as publicCssManagePlugin, publicCssManagePlugin as publicCssManage, type PublicCssManageOptions } from './publicCssManage';
+export { createBunConfig, wrapPlugin } from './shims';

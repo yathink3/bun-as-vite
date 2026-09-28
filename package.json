@@ -15,6 +15,46 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./code-split": {
+      "types": "./dist/plugins/codeSplit.d.ts",
+      "import": "./dist/plugins/codeSplit.js"
+    },
+    "./proxy-redirects": {
+      "types": "./dist/plugins/proxyRedirects.d.ts",
+      "import": "./dist/plugins/proxyRedirects.js"
+    },
+    "./custom-config": {
+      "types": "./dist/plugins/customConfig.d.ts",
+      "import": "./dist/plugins/customConfig.js"
+    },
+    "./env-loader": {
+      "types": "./dist/plugins/envLoader.d.ts",
+      "import": "./dist/plugins/envLoader.js"
+    },
+    "./build-scorer": {
+      "types": "./dist/plugins/buildScorer.d.ts",
+      "import": "./dist/plugins/buildScorer.js"
+    },
+    "./tailwindcss": {
+      "types": "./dist/plugins/tailwindcss.d.ts",
+      "import": "./dist/plugins/tailwindcss.js"
+    },
+    "./legacy-config": {
+      "types": "./dist/plugins/legacyConfig.d.ts",
+      "import": "./dist/plugins/legacyConfig.js"
+    },
+    "./public-css-manage": {
+      "types": "./dist/plugins/publicCssManage.d.ts",
+      "import": "./dist/plugins/publicCssManage.js"
+    },
+    "./build-log-modifier": {
+      "types": "./dist/plugins/buildLogModifier.d.ts",
+      "import": "./dist/plugins/buildLogModifier.js"
+    },
+    "./bun-plugin": {
+      "types": "./dist/plugins/bunPlugin.d.ts",
+      "import": "./dist/plugins/bunPlugin.js"
+    },
     "./plugins": {
       "types": "./dist/plugins/index.d.ts",
       "import": "./dist/plugins/index.js"
@@ -65,6 +105,6 @@
     "@types/bun": "latest",
     "@types/node": "^22.0.0",
     "typescript": "^5.5.0",
-    "vite": "^8.3.1"
+    "vite": "^8.0.0"
   }
 }
