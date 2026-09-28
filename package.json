@@ -1,6 +1,6 @@
 {
   "name": "bun-as-vite",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Run Vite-configured React and web apps on Bun natively with zero config rewrite. Full drop-in replacement for Vite defineConfig with Bun.build and Bun.serve.",
   "type": "module",
   "main": "./dist/index.js",
