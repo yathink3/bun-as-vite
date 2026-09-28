@@ -1,5 +1,11 @@
 export { default as codeSplitPlugin, codeSplitPlugin as codeSplit, type CodeSplitPluginOptions, type CodeSplitGroup } from './codeSplit';
-export { default as proxyRedirectsPlugin, proxyRedirectsPlugin as proxyRedirects, type ProxyRedirectsPluginOptions } from './proxyRedirects';
+export {
+  default as proxyRedirectsPlugin,
+  proxyRedirectsPlugin as proxyRedirects,
+  type ProxyRedirectsPluginOptions,
+  type ProxyRedirectsOptions,
+  type DeployPlatform,
+} from './proxyRedirects';
 export { default as customConfigPlugin, customConfigPlugin as customConfig, type CustomConfigPluginOptions } from './customConfig';
 export { default as envLoaderPlugin, envLoaderPlugin as envLoader, type EnvLoaderPluginOptions } from './envLoader';
 export { default as buildScorerPlugin, buildScorerPlugin as buildScorer, type BuildScorerPluginOptions } from './buildScorer';

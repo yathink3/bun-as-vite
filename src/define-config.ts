@@ -346,13 +346,18 @@ export async function runBuild(resolvedConfig: ResolvedConfig): Promise<void> {
     console.log('\x1b[32m✔  [bun-as-vite:build]\x1b[0m Generated build/index.html');
   }
 
-  const redirectTemplatePath = path.resolve(root, 'redirects.template');
-  if (fs.existsSync(redirectTemplatePath)) {
-    const raw = fs.readFileSync(redirectTemplatePath, 'utf8');
-    const mergedEnv = { ...process.env, ...envVars };
-    const resolved = raw.replace(/\{\{(.*?)\}\}/g, (_, k) => mergedEnv[k] || '');
-    fs.writeFileSync(path.join(outDir, '_redirects'), resolved, 'utf8');
-    console.log('\x1b[32m✔  [bun-as-vite:build]\x1b[0m Generated build/_redirects');
+  const hasProxyRedirectsPlugin = plugins.some(
+    (p) => p && (p.name === 'bav:proxy-redirects' || p.name === 'vite-plugin-proxy-redirects')
+  );
+  if (!hasProxyRedirectsPlugin) {
+    const redirectTemplatePath = path.resolve(root, 'redirects.template');
+    if (fs.existsSync(redirectTemplatePath)) {
+      const raw = fs.readFileSync(redirectTemplatePath, 'utf8');
+      const mergedEnv = { ...process.env, ...envVars };
+      const resolved = raw.replace(/\{\{(.*?)\}\}/g, (_, k) => mergedEnv[k] || '');
+      fs.writeFileSync(path.join(outDir, '_redirects'), resolved, 'utf8');
+      console.log('\x1b[32m✔  [bun-as-vite:build]\x1b[0m Generated build/_redirects');
+    }
   }
 
   const elapsedMs = Date.now() - t0;
