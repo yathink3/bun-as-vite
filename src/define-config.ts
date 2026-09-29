@@ -14,6 +14,7 @@ import type {
   CLIOptions,
   ResolvedConfig,
   PluginContext,
+  LocalRewriteRule,
 } from './types';
 
 const CSS_EXTS = new Set(['.css', '.scss', '.sass', '.less']);
@@ -246,6 +247,29 @@ function serveFile(filePath: string, { isPreview = false, isDev = false }: { isP
   return new Response((Bun as any).file(filePath), { headers });
 }
 
+function resolveTemplateRewrites(root: string = process.cwd()): LocalRewriteRule[] {
+  const rewrites: LocalRewriteRule[] = [];
+  const templatePath = path.join(root, 'redirects.template');
+  if (fs.existsSync(templatePath)) {
+    try {
+      const content = fs.readFileSync(templatePath, 'utf8');
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const [from, raw] = trimmed.split(/\s+/);
+        if (!from || !raw) continue;
+        if (raw.includes('{{')) continue;
+        if (/^https?:\/\//i.test(raw) || /^wss?:\/\//i.test(raw)) continue;
+        if (from === '/*' && (raw === '/index.html' || raw === 'index.html')) continue;
+        const cleanFrom = from.replace(/\*$/, '');
+        const prefix = cleanFrom.length > 1 && cleanFrom.endsWith('/') ? cleanFrom.slice(0, -1) : cleanFrom;
+        rewrites.push({ from, to: raw, prefix, status: 200 });
+      }
+    } catch {}
+  }
+  return rewrites;
+}
+
 function resolveServerProxy(serverProxy: Record<string, any> = {}, root: string = process.cwd()): Record<string, any> {
   const merged = { ...serverProxy };
   if (Object.keys(merged).length === 0) {
@@ -261,16 +285,26 @@ function resolveServerProxy(serverProxy: Record<string, any> = {}, root: string 
           if (!from || !raw) continue;
           const resolved = raw.replace(/\{\{(.*?)\}\}/g, (_, k) => env[k] || '');
           if (resolved.includes('{{')) continue;
+          const isProxy = /^https?:\/\//i.test(resolved) || /^wss?:\/\//i.test(resolved);
+          if (!isProxy) continue;
           const cleanFrom = from.replace(/\*$/, '');
           const route = cleanFrom.length > 1 && cleanFrom.endsWith('/') ? cleanFrom.slice(0, -1) : cleanFrom;
           if (route === '/') continue;
           const target = resolved.match(/^https?:\/\/[^/]+/)?.[0] || '';
+          if (!target) continue;
           const urlpart = resolved.slice(target.length);
           const pathPart = (urlpart.replace(/\*/g, '').replace(/:\w+$/, '') || '/').replace(/\/+$/, '');
-          const proxyEntry: any = { target, changeOrigin: true, secure: false };
-          if (pathPart && pathPart !== route) {
+          const cleanPathPart = pathPart.replace(/\/+$/, '');
+          const proxyEntry: any = {
+            target,
+            displayTarget: `${target}${cleanPathPart}`,
+            pathPart: cleanPathPart,
+            changeOrigin: true,
+            secure: false,
+          };
+          if (cleanPathPart && cleanPathPart !== route) {
             const pat = new RegExp(`^${route}(/|$)`);
-            proxyEntry.rewrite = (p: string) => p.replace(pat, `${pathPart}$1`);
+            proxyEntry.rewrite = (p: string) => p.replace(pat, `${cleanPathPart}$1`);
           }
           merged[route] = proxyEntry;
         }
@@ -278,6 +312,191 @@ function resolveServerProxy(serverProxy: Record<string, any> = {}, root: string 
     }
   }
   return merged;
+}
+
+const subAppBuildDirCache = new Map<string, string[]>();
+
+function detectSubAppBuildDirs(root: string, prefix: string): string[] {
+  const cleanPrefix = prefix.replace(/^\/+|\/+$/g, '');
+  if (!cleanPrefix) return [];
+
+  const cacheKey = `${root}:${cleanPrefix}`;
+  if (subAppBuildDirCache.has(cacheKey)) {
+    return subAppBuildDirCache.get(cacheKey)!;
+  }
+
+  const detectedDirs: string[] = [];
+  const addDir = (dirPath: string) => {
+    if (dirPath && fs.existsSync(dirPath)) {
+      try {
+        if (fs.statSync(dirPath).isDirectory() && !detectedDirs.includes(dirPath)) {
+          detectedDirs.push(dirPath);
+        }
+      } catch {}
+    }
+  };
+
+  // 1. Detect from root package.json scripts (e.g. scripts that copy/combine sub-app build outputs)
+  const rootPkgPath = path.join(root, 'package.json');
+  if (fs.existsSync(rootPkgPath)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(rootPkgPath, 'utf8'));
+      for (const script of Object.values(pkg.scripts || {})) {
+        if (typeof script !== 'string') continue;
+        const matches = script.matchAll(/(?:cp\s+(?:-[a-zA-Z]+\s+)*|copy\s+)([^\s*]+)(?:\/\*)?\s+([^\s*]+)/g);
+        for (const match of matches) {
+          const srcPart = match[1];
+          const dstPart = match[2];
+          if (dstPart.includes(cleanPrefix) || srcPart.includes(cleanPrefix)) {
+            addDir(path.resolve(root, srcPart));
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // 2. Discover sub-projects in root that target this prefix via config files
+  try {
+    const entries = fs.readdirSync(root, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const subName = entry.name;
+      if (subName.startsWith('.') || subName === 'node_modules') continue;
+
+      const subDirPath = path.join(root, subName);
+      const configFiles = [
+        'vite.config.ts',
+        'vite.config.js',
+        'vite.config.mjs',
+        'bun.config.js',
+        'bun.config.ts',
+      ];
+
+      for (const cfgFile of configFiles) {
+        const cfgPath = path.join(subDirPath, cfgFile);
+        if (!fs.existsSync(cfgPath)) continue;
+
+        try {
+          const content = fs.readFileSync(cfgPath, 'utf8');
+          const baseRegex = new RegExp(`base\\s*:\\s*['"]\\/?${cleanPrefix}\\/?['"]`);
+          const matchesPrefix = subName === cleanPrefix || baseRegex.test(content);
+
+          if (matchesPrefix) {
+            // Auto-detect outDir from the sub-project's config
+            const outDirMatch = content.match(/outDir\s*:\s*['"]([^'"]+)['"]/);
+            if (outDirMatch && outDirMatch[1]) {
+              addDir(path.resolve(subDirPath, outDirMatch[1]));
+            }
+
+            // Also check sub-project package.json for build output flags
+            const subPkgPath = path.join(subDirPath, 'package.json');
+            if (fs.existsSync(subPkgPath)) {
+              try {
+                const subPkg = JSON.parse(fs.readFileSync(subPkgPath, 'utf8'));
+                for (const s of Object.values(subPkg.scripts || {})) {
+                  if (typeof s !== 'string') continue;
+                  const outMatch = s.match(/--outDir\s+([^\s]+)/);
+                  if (outMatch && outMatch[1]) {
+                    addDir(path.resolve(subDirPath, outMatch[1]));
+                  }
+                }
+              } catch {}
+            }
+
+            addDir(path.join(subDirPath, 'dist'));
+            addDir(subDirPath);
+          }
+        } catch {}
+      }
+    }
+  } catch {}
+
+  subAppBuildDirCache.set(cacheKey, detectedDirs);
+  return detectedDirs;
+}
+
+function handleLocalRewrite(
+  pathname: string,
+  url: URL,
+  rewrites: LocalRewriteRule[],
+  context: {
+    root: string;
+    srcDir: string;
+    publicDir: string;
+    outDir?: string;
+    isDev?: boolean;
+    isPreview?: boolean;
+  }
+): Response | null {
+  if (!rewrites || rewrites.length === 0) return null;
+
+  for (const rw of rewrites) {
+    if (rw.prefix === '/' || !rw.prefix) continue;
+
+    if (pathname === rw.prefix || pathname.startsWith(rw.prefix + '/')) {
+      const { root, publicDir, outDir, isDev, isPreview } = context;
+
+      // 1. If exact prefix requested without trailing slash, redirect to trailing slash
+      if (pathname === rw.prefix) {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: `${rw.prefix}/${url.search}` },
+        });
+      }
+
+      // 2. Check if a static asset directly exists for this pathname
+      const directCandidates: string[] = [];
+      if (outDir) {
+        directCandidates.push(path.join(outDir, pathname));
+      }
+      directCandidates.push(path.join(publicDir, pathname));
+      directCandidates.push(path.join(root, pathname));
+
+      const detectedBuildDirs = detectSubAppBuildDirs(root, rw.prefix);
+      const subPath = pathname.slice(rw.prefix.length);
+      for (const bDir of detectedBuildDirs) {
+        directCandidates.push(path.join(bDir, subPath));
+        directCandidates.push(path.join(bDir, pathname));
+      }
+
+      for (const candidate of directCandidates) {
+        if (fs.existsSync(candidate)) {
+          try {
+            if (!fs.statSync(candidate).isDirectory()) {
+              return serveFile(candidate, isDev ? { isDev: true } : { isPreview: true });
+            }
+          } catch {}
+        }
+      }
+
+      // 3. SPA fallback: serve the target HTML file (e.g. /xai/index.html)
+      const htmlCandidates: string[] = [];
+      if (outDir) {
+        htmlCandidates.push(path.join(outDir, rw.to));
+        const cleanPrefix = rw.prefix.replace(/^\/+|\/+$/g, '');
+        if (cleanPrefix) {
+          htmlCandidates.push(path.join(outDir, cleanPrefix, 'index.html'));
+        }
+      }
+      htmlCandidates.push(path.join(publicDir, rw.to));
+      htmlCandidates.push(path.join(root, rw.to));
+
+      for (const bDir of detectedBuildDirs) {
+        htmlCandidates.push(path.join(bDir, 'index.html'));
+        htmlCandidates.push(path.join(bDir, rw.to));
+      }
+
+      for (const htmlFile of htmlCandidates) {
+        if (fs.existsSync(htmlFile)) {
+          try {
+            return serveFile(htmlFile, isDev ? { isDev: true } : { isPreview: true });
+          } catch {}
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 export async function runBuild(resolvedConfig: ResolvedConfig): Promise<void> {
@@ -385,7 +604,8 @@ export async function runPreview(resolvedConfig: ResolvedConfig): Promise<void> 
   }
 
   const proxyRules = resolvedConfig.proxyRules || [];
-  logProxyRules(proxyRules);
+  const rewrites = resolvedConfig.rewrites || [];
+  logProxyRules(proxyRules, rewrites);
 
   (Bun as any).serve({
     port,
@@ -399,6 +619,15 @@ export async function runPreview(resolvedConfig: ResolvedConfig): Promise<void> 
 
       const proxyRes = await handleProxyRequest(req, proxyRules);
       if (proxyRes) return proxyRes;
+
+      const rewriteRes = handleLocalRewrite(pathname, url, rewrites, {
+        root,
+        srcDir,
+        publicDir,
+        outDir,
+        isPreview: true,
+      });
+      if (rewriteRes) return rewriteRes;
 
       const direct = path.join(outDir, pathname);
       if (pathname !== '/' && fs.existsSync(direct)) {
@@ -422,7 +651,7 @@ export async function runPreview(resolvedConfig: ResolvedConfig): Promise<void> 
 }
 
 export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
-  const { root, srcDir, publicDir, define, plugins, bunPlugin } = resolvedConfig;
+  const { root, srcDir, publicDir, outDir, define, plugins, bunPlugin } = resolvedConfig;
   const port = resolvedConfig.server?.port || resolvedConfig.port || 4545;
   const host = resolvedConfig.server?.host || resolvedConfig.host || '0.0.0.0';
   const devDir = path.resolve(root, '.bun-dev');
@@ -431,7 +660,8 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
   fs.mkdirSync(devDir, { recursive: true });
 
   const proxyRules = resolvedConfig.proxyRules || [];
-  logProxyRules(proxyRules);
+  const rewrites = resolvedConfig.rewrites || [];
+  logProxyRules(proxyRules, rewrites);
 
   let entryJs = '';
   let isBuilding = false;
@@ -583,6 +813,15 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
       const proxyRes = await handleProxyRequest(req, proxyRules);
       if (proxyRes) return proxyRes;
 
+      const rewriteRes = handleLocalRewrite(pathname, url, rewrites, {
+        root,
+        srcDir,
+        publicDir,
+        outDir,
+        isDev: true,
+      });
+      if (rewriteRes) return rewriteRes;
+
       if (pathname.startsWith('/assets/')) {
         const devFile = path.join(devDir, pathname);
         if (fs.existsSync(devFile) && !fs.statSync(devFile).isDirectory()) {
@@ -724,6 +963,14 @@ export function defineConfig(configOrFactory: ConfigFactory | UserConfig) {
     server.proxy = resolvedProxy;
     const proxyRules = parseServerProxy(resolvedProxy);
 
+    const templateRewrites = resolveTemplateRewrites(root);
+    const existingRewrites = bunConfig.server?.rewrites || [];
+    const seenRewrites = new Set(existingRewrites.map((r) => r.from));
+    const rewrites = [
+      ...existingRewrites,
+      ...templateRewrites.filter((r) => !seenRewrites.has(r.from)),
+    ];
+
     const VITE_CORE_KEYS = new Set([
       'root', 'base', 'mode', 'define', 'publicDir', 'envDir', 'envPrefix',
       'server', 'build', 'preview', 'plugins', 'resolve', 'css', 'json',
@@ -769,6 +1016,7 @@ export function defineConfig(configOrFactory: ConfigFactory | UserConfig) {
       host: server.host,
       server,
       proxyRules,
+      rewrites,
       minify: cliOpts.minify ?? true,
       define: userDefine,
       plugins,

@@ -192,20 +192,35 @@ export function proxyRedirectsPlugin(options: ProxyRedirectsPluginOptions = {}):
           const route = cleanFrom.length > 1 && cleanFrom.endsWith('/') ? cleanFrom.slice(0, -1) : cleanFrom;
           if (route === '/') continue;
 
-          const { target, pathPart } = splitTargetPath(resolved);
-          const cleanPathPart = pathPart.replace(/\/+$/, '');
-          const proxyEntry: any = {
-            target,
-            changeOrigin: true,
-            secure: false,
-          };
+          const isProxy = /^https?:\/\//i.test(resolved) || /^wss?:\/\//i.test(resolved);
 
-          if (cleanPathPart && cleanPathPart !== route) {
-            const pat = new RegExp(`^${route}(/|$)`);
-            proxyEntry.rewrite = (p: string) => p.replace(pat, `${cleanPathPart}$1`);
+          if (isProxy) {
+            const { target, pathPart } = splitTargetPath(resolved);
+            const cleanPathPart = pathPart.replace(/\/+$/, '');
+            const proxyEntry: any = {
+              target,
+              displayTarget: `${target}${cleanPathPart}`,
+              pathPart: cleanPathPart,
+              changeOrigin: true,
+              secure: false,
+            };
+
+            if (cleanPathPart && cleanPathPart !== route) {
+              const pat = new RegExp(`^${route}(/|$)`);
+              proxyEntry.rewrite = (p: string) => p.replace(pat, `${cleanPathPart}$1`);
+            }
+
+            ctx.config.server.proxy[route] = proxyEntry;
+          } else {
+            if (from === '/*' && (resolved === '/index.html' || resolved === 'index.html')) continue;
+            ctx.config.server.rewrites = ctx.config.server.rewrites || [];
+            ctx.config.server.rewrites.push({
+              from,
+              to: resolved,
+              prefix: route,
+              status: 200,
+            });
           }
-
-          ctx.config.server.proxy[route] = proxyEntry;
         }
       }
     },

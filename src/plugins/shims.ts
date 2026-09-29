@@ -13,6 +13,7 @@ export function createBunConfig(): BunConfig {
     cssTransformChain: [],
     server: {
       proxy: {},
+      rewrites: [],
     },
     entrypoint: null,
     extraEntrypoints: [],

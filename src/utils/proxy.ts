@@ -98,11 +98,13 @@ export function parseServerProxy(serverProxy: Record<string, any>): ServerProxyR
       });
     } else if (typeof val === 'object') {
       const target = val.target || '';
+      if (!target) continue;
       const targetBase = target.match(/^(?:https?|wss?):\/\/[^/]+/)?.[0] || target;
-      const pathPart = target.slice(targetBase.length).replace(/\/+$/, '');
+      const pathPart = (val.pathPart !== undefined ? val.pathPart : target.slice(targetBase.length)).replace(/\/+$/, '');
+      const displayTarget = val.displayTarget || (pathPart ? `${targetBase}${pathPart}` : target);
       rules.push({
         displayKey: key,
-        displayTarget: target,
+        displayTarget,
         prefix,
         isRegex,
         regex,
@@ -190,16 +192,27 @@ function colorStatus(status: number, statusText: string = ''): string {
 /**
  * Logs registered proxy rewrite rules.
  */
-export function logProxyRules(rules: any[]): void {
-  if (!rules || rules.length === 0) return;
-  for (const rule of rules) {
-    const from = rule.displayKey || rule.prefix || (rule.regex ? rule.regex.toString() : '');
-    const to = rule.displayTarget || `${rule.targetBase}${rule.pathPart || ''}`;
-    console.log(
-      `  \x1b[36m↪\x1b[0m \x1b[90mproxy\x1b[0m \x1b[37m[REWRITE]\x1b[0m \x1b[36m${from}\x1b[0m \x1b[90m→\x1b[0m \x1b[35m${to}\x1b[0m`
-    );
+export function logProxyRules(rules: any[], rewrites: any[] = []): void {
+  if (rules && rules.length > 0) {
+    for (const rule of rules) {
+      const from = rule.displayKey || rule.prefix || (rule.regex ? rule.regex.toString() : '');
+      const to = rule.displayTarget || `${rule.targetBase}${rule.pathPart || ''}`;
+      console.log(
+        `  \x1b[36m↪\x1b[0m \x1b[90mproxy\x1b[0m \x1b[37m[REWRITE]\x1b[0m \x1b[36m${from}\x1b[0m \x1b[90m→\x1b[0m \x1b[35m${to}\x1b[0m`
+      );
+    }
   }
-  console.log(`\x1b[32m✔\x1b[0m  \x1b[32mDevelopment redirects loaded\x1b[0m\n`);
+  if (rewrites && rewrites.length > 0) {
+    for (const rw of rewrites) {
+      if (rw.prefix === '/' || !rw.prefix) continue;
+      console.log(
+        `  \x1b[36m↪\x1b[0m \x1b[90mspa\x1b[0m   \x1b[37m[REWRITE]\x1b[0m \x1b[36m${rw.from}\x1b[0m \x1b[90m→\x1b[0m \x1b[32m${rw.to}\x1b[0m`
+      );
+    }
+  }
+  if ((rules && rules.length > 0) || (rewrites && rewrites.length > 0)) {
+    console.log(`\x1b[32m✔\x1b[0m  \x1b[32mDevelopment redirects loaded\x1b[0m\n`);
+  }
 }
 
 /**

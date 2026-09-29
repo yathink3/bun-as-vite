@@ -23,6 +23,13 @@ export interface ProxyRule {
   configure?: ((proxy: any, options: any) => void) | null;
 }
 
+export interface LocalRewriteRule {
+  from: string;
+  to: string;
+  prefix: string;
+  status?: number;
+}
+
 export interface BunConfig {
   alias: Record<string, string>;
   autoMapSrcFolders: boolean;
@@ -30,6 +37,7 @@ export interface BunConfig {
   cssTransformChain: Array<(rawCss: string, filePath: string, root: string) => Promise<string | null> | string | null>;
   server: {
     proxy: Record<string, any>;
+    rewrites?: LocalRewriteRule[];
   };
   entrypoint: string | null;
   extraEntrypoints: string[];
@@ -133,6 +141,7 @@ export interface ResolvedConfig {
     proxy: Record<string, any>;
   };
   proxyRules: ProxyRule[];
+  rewrites: LocalRewriteRule[];
   minify: boolean;
   define: Record<string, any>;
   plugins: BavPlugin[];
