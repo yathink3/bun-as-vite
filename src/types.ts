@@ -75,6 +75,9 @@ export interface ServerRequestContext {
   mode: 'dev' | 'preview';
   srcDir: string;
   root: string;
+  /** Full resolved outDir — available in preview mode */
+  outDir?: string;
+  publicDir?: string;
 }
 
 export interface BavPlugin {

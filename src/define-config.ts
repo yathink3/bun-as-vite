@@ -14,8 +14,9 @@ import type {
   CLIOptions,
   ResolvedConfig,
   PluginContext,
-  LocalRewriteRule,
 } from './types';
+
+// ─── file extension sets ──────────────────────────────────────────────────────
 
 const CSS_EXTS = new Set(['.css', '.scss', '.sass', '.less']);
 const WATCH_EXTS = new Set([
@@ -32,6 +33,8 @@ const WATCH_EXTS = new Set([
   '.jpg',
   '.jpeg',
 ]);
+
+// ─── plugin hook runners ──────────────────────────────────────────────────────
 
 async function runConfigHooks(plugins: BavPlugin[], env: Omit<PluginContext, 'config'>): Promise<BunConfig> {
   const config = createBunConfig();
@@ -84,7 +87,7 @@ async function runBuildCompleteHooks(
 async function runServerRequestHooks(
   plugins: BavPlugin[],
   req: Request,
-  ctx: { mode: 'dev' | 'preview'; srcDir: string; root: string }
+  ctx: { mode: 'dev' | 'preview'; srcDir: string; root: string; outDir?: string; publicDir?: string }
 ): Promise<Response | null> {
   for (const plugin of plugins) {
     if (!plugin || typeof plugin.serverRequest !== 'function') continue;
@@ -97,6 +100,8 @@ async function runServerRequestHooks(
   }
   return null;
 }
+
+// ─── env helpers ──────────────────────────────────────────────────────────────
 
 function loadEnvFile(root: string, mode: string = 'development'): Record<string, string> {
   const envFiles = [
@@ -150,6 +155,8 @@ function buildDefineMap(
   }
   return define;
 }
+
+// ─── HTML helpers ─────────────────────────────────────────────────────────────
 
 function transformIndexHtml(
   html: string,
@@ -226,6 +233,8 @@ function injectHmrClient(html: string): string {
   return html + snippet;
 }
 
+// ─── static-file helpers ──────────────────────────────────────────────────────
+
 function serveFile(filePath: string, { isPreview = false, isDev = false }: { isPreview?: boolean; isDev?: boolean } = {}): Response {
   const ext = path.extname(filePath).toLowerCase();
   const contentType = MIME_TYPES[ext] || (Bun as any).file(filePath).type || 'application/octet-stream';
@@ -247,257 +256,7 @@ function serveFile(filePath: string, { isPreview = false, isDev = false }: { isP
   return new Response((Bun as any).file(filePath), { headers });
 }
 
-function resolveTemplateRewrites(root: string = process.cwd()): LocalRewriteRule[] {
-  const rewrites: LocalRewriteRule[] = [];
-  const templatePath = path.join(root, 'redirects.template');
-  if (fs.existsSync(templatePath)) {
-    try {
-      const content = fs.readFileSync(templatePath, 'utf8');
-      for (const line of content.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith('#')) continue;
-        const [from, raw] = trimmed.split(/\s+/);
-        if (!from || !raw) continue;
-        if (raw.includes('{{')) continue;
-        if (/^https?:\/\//i.test(raw) || /^wss?:\/\//i.test(raw)) continue;
-        if (from === '/*' && (raw === '/index.html' || raw === 'index.html')) continue;
-        const cleanFrom = from.replace(/\*$/, '');
-        const prefix = cleanFrom.length > 1 && cleanFrom.endsWith('/') ? cleanFrom.slice(0, -1) : cleanFrom;
-        rewrites.push({ from, to: raw, prefix, status: 200 });
-      }
-    } catch {}
-  }
-  return rewrites;
-}
-
-function resolveServerProxy(serverProxy: Record<string, any> = {}, root: string = process.cwd()): Record<string, any> {
-  const merged = { ...serverProxy };
-  if (Object.keys(merged).length === 0) {
-    const templatePath = path.join(root, 'redirects.template');
-    if (fs.existsSync(templatePath)) {
-      try {
-        const content = fs.readFileSync(templatePath, 'utf8');
-        const env = process.env;
-        for (const line of content.split('\n')) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed.startsWith('#')) continue;
-          const [from, raw] = trimmed.split(/\s+/);
-          if (!from || !raw) continue;
-          const resolved = raw.replace(/\{\{(.*?)\}\}/g, (_, k) => env[k] || '');
-          if (resolved.includes('{{')) continue;
-          const isProxy = /^https?:\/\//i.test(resolved) || /^wss?:\/\//i.test(resolved);
-          if (!isProxy) continue;
-          const cleanFrom = from.replace(/\*$/, '');
-          const route = cleanFrom.length > 1 && cleanFrom.endsWith('/') ? cleanFrom.slice(0, -1) : cleanFrom;
-          if (route === '/') continue;
-          const target = resolved.match(/^https?:\/\/[^/]+/)?.[0] || '';
-          if (!target) continue;
-          const urlpart = resolved.slice(target.length);
-          const pathPart = (urlpart.replace(/\*/g, '').replace(/:\w+$/, '') || '/').replace(/\/+$/, '');
-          const cleanPathPart = pathPart.replace(/\/+$/, '');
-          const proxyEntry: any = {
-            target,
-            displayTarget: `${target}${cleanPathPart}`,
-            pathPart: cleanPathPart,
-            changeOrigin: true,
-            secure: false,
-          };
-          if (cleanPathPart && cleanPathPart !== route) {
-            const pat = new RegExp(`^${route}(/|$)`);
-            proxyEntry.rewrite = (p: string) => p.replace(pat, `${cleanPathPart}$1`);
-          }
-          merged[route] = proxyEntry;
-        }
-      } catch {}
-    }
-  }
-  return merged;
-}
-
-const subAppBuildDirCache = new Map<string, string[]>();
-
-function detectSubAppBuildDirs(root: string, prefix: string): string[] {
-  const cleanPrefix = prefix.replace(/^\/+|\/+$/g, '');
-  if (!cleanPrefix) return [];
-
-  const cacheKey = `${root}:${cleanPrefix}`;
-  if (subAppBuildDirCache.has(cacheKey)) {
-    return subAppBuildDirCache.get(cacheKey)!;
-  }
-
-  const detectedDirs: string[] = [];
-  const addDir = (dirPath: string) => {
-    if (dirPath && fs.existsSync(dirPath)) {
-      try {
-        if (fs.statSync(dirPath).isDirectory() && !detectedDirs.includes(dirPath)) {
-          detectedDirs.push(dirPath);
-        }
-      } catch {}
-    }
-  };
-
-  // 1. Detect from root package.json scripts (e.g. scripts that copy/combine sub-app build outputs)
-  const rootPkgPath = path.join(root, 'package.json');
-  if (fs.existsSync(rootPkgPath)) {
-    try {
-      const pkg = JSON.parse(fs.readFileSync(rootPkgPath, 'utf8'));
-      for (const script of Object.values(pkg.scripts || {})) {
-        if (typeof script !== 'string') continue;
-        const matches = script.matchAll(/(?:cp\s+(?:-[a-zA-Z]+\s+)*|copy\s+)([^\s*]+)(?:\/\*)?\s+([^\s*]+)/g);
-        for (const match of matches) {
-          const srcPart = match[1];
-          const dstPart = match[2];
-          if (dstPart.includes(cleanPrefix) || srcPart.includes(cleanPrefix)) {
-            addDir(path.resolve(root, srcPart));
-          }
-        }
-      }
-    } catch {}
-  }
-
-  // 2. Discover sub-projects in root that target this prefix via config files
-  try {
-    const entries = fs.readdirSync(root, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const subName = entry.name;
-      if (subName.startsWith('.') || subName === 'node_modules') continue;
-
-      const subDirPath = path.join(root, subName);
-      const configFiles = [
-        'vite.config.ts',
-        'vite.config.js',
-        'vite.config.mjs',
-        'bun.config.js',
-        'bun.config.ts',
-      ];
-
-      for (const cfgFile of configFiles) {
-        const cfgPath = path.join(subDirPath, cfgFile);
-        if (!fs.existsSync(cfgPath)) continue;
-
-        try {
-          const content = fs.readFileSync(cfgPath, 'utf8');
-          const baseRegex = new RegExp(`base\\s*:\\s*['"]\\/?${cleanPrefix}\\/?['"]`);
-          const matchesPrefix = subName === cleanPrefix || baseRegex.test(content);
-
-          if (matchesPrefix) {
-            // Auto-detect outDir from the sub-project's config
-            const outDirMatch = content.match(/outDir\s*:\s*['"]([^'"]+)['"]/);
-            if (outDirMatch && outDirMatch[1]) {
-              addDir(path.resolve(subDirPath, outDirMatch[1]));
-            }
-
-            // Also check sub-project package.json for build output flags
-            const subPkgPath = path.join(subDirPath, 'package.json');
-            if (fs.existsSync(subPkgPath)) {
-              try {
-                const subPkg = JSON.parse(fs.readFileSync(subPkgPath, 'utf8'));
-                for (const s of Object.values(subPkg.scripts || {})) {
-                  if (typeof s !== 'string') continue;
-                  const outMatch = s.match(/--outDir\s+([^\s]+)/);
-                  if (outMatch && outMatch[1]) {
-                    addDir(path.resolve(subDirPath, outMatch[1]));
-                  }
-                }
-              } catch {}
-            }
-
-            addDir(path.join(subDirPath, 'dist'));
-            addDir(subDirPath);
-          }
-        } catch {}
-      }
-    }
-  } catch {}
-
-  subAppBuildDirCache.set(cacheKey, detectedDirs);
-  return detectedDirs;
-}
-
-function handleLocalRewrite(
-  pathname: string,
-  url: URL,
-  rewrites: LocalRewriteRule[],
-  context: {
-    root: string;
-    srcDir: string;
-    publicDir: string;
-    outDir?: string;
-    isDev?: boolean;
-    isPreview?: boolean;
-  }
-): Response | null {
-  if (!rewrites || rewrites.length === 0) return null;
-
-  for (const rw of rewrites) {
-    if (rw.prefix === '/' || !rw.prefix) continue;
-
-    if (pathname === rw.prefix || pathname.startsWith(rw.prefix + '/')) {
-      const { root, publicDir, outDir, isDev, isPreview } = context;
-
-      // 1. If exact prefix requested without trailing slash, redirect to trailing slash
-      if (pathname === rw.prefix) {
-        return new Response(null, {
-          status: 302,
-          headers: { Location: `${rw.prefix}/${url.search}` },
-        });
-      }
-
-      // 2. Check if a static asset directly exists for this pathname
-      const directCandidates: string[] = [];
-      if (outDir) {
-        directCandidates.push(path.join(outDir, pathname));
-      }
-      directCandidates.push(path.join(publicDir, pathname));
-      directCandidates.push(path.join(root, pathname));
-
-      const detectedBuildDirs = detectSubAppBuildDirs(root, rw.prefix);
-      const subPath = pathname.slice(rw.prefix.length);
-      for (const bDir of detectedBuildDirs) {
-        directCandidates.push(path.join(bDir, subPath));
-        directCandidates.push(path.join(bDir, pathname));
-      }
-
-      for (const candidate of directCandidates) {
-        if (fs.existsSync(candidate)) {
-          try {
-            if (!fs.statSync(candidate).isDirectory()) {
-              return serveFile(candidate, isDev ? { isDev: true } : { isPreview: true });
-            }
-          } catch {}
-        }
-      }
-
-      // 3. SPA fallback: serve the target HTML file (e.g. /xai/index.html)
-      const htmlCandidates: string[] = [];
-      if (outDir) {
-        htmlCandidates.push(path.join(outDir, rw.to));
-        const cleanPrefix = rw.prefix.replace(/^\/+|\/+$/g, '');
-        if (cleanPrefix) {
-          htmlCandidates.push(path.join(outDir, cleanPrefix, 'index.html'));
-        }
-      }
-      htmlCandidates.push(path.join(publicDir, rw.to));
-      htmlCandidates.push(path.join(root, rw.to));
-
-      for (const bDir of detectedBuildDirs) {
-        htmlCandidates.push(path.join(bDir, 'index.html'));
-        htmlCandidates.push(path.join(bDir, rw.to));
-      }
-
-      for (const htmlFile of htmlCandidates) {
-        if (fs.existsSync(htmlFile)) {
-          try {
-            return serveFile(htmlFile, isDev ? { isDev: true } : { isPreview: true });
-          } catch {}
-        }
-      }
-    }
-  }
-
-  return null;
-}
+// ─── build / dev / preview runners ───────────────────────────────────────────
 
 export async function runBuild(resolvedConfig: ResolvedConfig): Promise<void> {
   const { root, srcDir, publicDir, outDir, minify, define, plugins, bunPlugin } = resolvedConfig;
@@ -565,20 +324,6 @@ export async function runBuild(resolvedConfig: ResolvedConfig): Promise<void> {
     console.log('\x1b[32m✔  [bun-as-vite:build]\x1b[0m Generated build/index.html');
   }
 
-  const hasProxyRedirectsPlugin = plugins.some(
-    (p) => p && (p.name === 'bav:proxy-redirects' || p.name === 'vite-plugin-proxy-redirects')
-  );
-  if (!hasProxyRedirectsPlugin) {
-    const redirectTemplatePath = path.resolve(root, 'redirects.template');
-    if (fs.existsSync(redirectTemplatePath)) {
-      const raw = fs.readFileSync(redirectTemplatePath, 'utf8');
-      const mergedEnv = { ...process.env, ...envVars };
-      const resolved = raw.replace(/\{\{(.*?)\}\}/g, (_, k) => mergedEnv[k] || '');
-      fs.writeFileSync(path.join(outDir, '_redirects'), resolved, 'utf8');
-      console.log('\x1b[32m✔  [bun-as-vite:build]\x1b[0m Generated build/_redirects');
-    }
-  }
-
   const elapsedMs = Date.now() - t0;
   console.log(
     `\x1b[32m✔  [bun-as-vite:build]\x1b[0m Built ${buildResult.outputs.length} outputs in ${elapsedMs}ms!`
@@ -614,20 +359,19 @@ export async function runPreview(resolvedConfig: ResolvedConfig): Promise<void> 
       const url = new URL(req.url);
       const pathname = url.pathname;
 
-      const pluginRes = await runServerRequestHooks(plugins, req, { mode: 'preview', srcDir, root });
+      // Plugin hooks — plugins like proxyRedirects own their own request handling
+      const pluginRes = await runServerRequestHooks(plugins, req, {
+        mode: 'preview',
+        srcDir,
+        root,
+        outDir,
+        publicDir,
+      });
       if (pluginRes) return pluginRes;
 
+      // Core proxy forwarding
       const proxyRes = await handleProxyRequest(req, proxyRules);
       if (proxyRes) return proxyRes;
-
-      const rewriteRes = handleLocalRewrite(pathname, url, rewrites, {
-        root,
-        srcDir,
-        publicDir,
-        outDir,
-        isPreview: true,
-      });
-      if (rewriteRes) return rewriteRes;
 
       const direct = path.join(outDir, pathname);
       if (pathname !== '/' && fs.existsSync(direct)) {
@@ -807,20 +551,18 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
         });
       }
 
-      const pluginRes = await runServerRequestHooks(plugins, req, { mode: 'dev', srcDir, root });
+      // Plugin hooks — plugins own their specific request handling
+      const pluginRes = await runServerRequestHooks(plugins, req, {
+        mode: 'dev',
+        srcDir,
+        root,
+        publicDir,
+      });
       if (pluginRes) return pluginRes;
 
+      // Core proxy forwarding
       const proxyRes = await handleProxyRequest(req, proxyRules);
       if (proxyRes) return proxyRes;
-
-      const rewriteRes = handleLocalRewrite(pathname, url, rewrites, {
-        root,
-        srcDir,
-        publicDir,
-        outDir,
-        isDev: true,
-      });
-      if (rewriteRes) return rewriteRes;
 
       if (pathname.startsWith('/assets/')) {
         const devFile = path.join(devDir, pathname);
@@ -880,6 +622,8 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
   console.log(`\x1b[90m    Host: ${host} | HMR: WebSocket enabled\x1b[0m\n`);
 }
 
+// ─── defineConfig ─────────────────────────────────────────────────────────────
+
 export function defineConfig(configOrFactory: ConfigFactory | UserConfig) {
   function getRawConfig(env: { mode: string; command: string } = { mode: 'development', command: 'serve' }): UserConfig {
     return typeof configOrFactory === 'function' ? (configOrFactory as any)(env) || {} : configOrFactory || {};
@@ -895,13 +639,16 @@ export function defineConfig(configOrFactory: ConfigFactory | UserConfig) {
     const publicDir = path.resolve(root, rawConfig.publicDir || 'public');
     const outDir = path.resolve(root, rawConfig.build?.outDir || 'build');
 
+    // Collect BAV-aware plugins (those implementing at least one lifecycle hook)
     const BAV_HOOKS = ['configBun', 'cssTransform', 'buildComplete', 'serverRequest'];
     const allPlugins = (rawConfig.plugins || []).flat(Infinity).filter(Boolean);
     const plugins = allPlugins.filter((p: any) => BAV_HOOKS.some((h) => typeof p[h] === 'function'));
 
+    // Run configBun hooks — each plugin mutates the shared BunConfig
     const userDefine = rawConfig.define || {};
     const bunConfig = await runConfigHooks(plugins, { root, srcDir, publicDir, mode, command });
 
+    // Build CSS transform pipeline from config chain + plugin hooks
     const hasCssTransforms =
       bunConfig.cssTransformChain.length > 0 || plugins.some((p: any) => typeof p.cssTransform === 'function');
 
@@ -920,6 +667,7 @@ export function defineConfig(configOrFactory: ConfigFactory | UserConfig) {
         }
       : null;
 
+    // Merge alias: user-defined aliases take precedence; plugins can add extras via config.alias
     const userAlias: Record<string, string> = {};
     if (rawConfig.resolve?.alias) {
       if (Array.isArray(rawConfig.resolve.alias)) {
@@ -935,6 +683,7 @@ export function defineConfig(configOrFactory: ConfigFactory | UserConfig) {
       ...(bunConfig.alias || {}),
     };
 
+    // Create the core Bun resolver/CSS-injection plugin
     const bunPlugin = bunAsVite({
       root,
       srcDir,
@@ -945,11 +694,13 @@ export function defineConfig(configOrFactory: ConfigFactory | UserConfig) {
       cssTransform,
     });
 
+    // Resolve server config: Vite-style server.proxy → internal ProxyRule[]
     const rawServer = rawConfig.server || {};
     const server = {
       port: cliOpts.port || Number(process.env.PORT) || rawServer.port || 4545,
       host: cliOpts.host || process.env.HOST || rawServer.host || '0.0.0.0',
       proxy: {
+        // Plugin-contributed proxy rules come first, user config overrides
         ...(bunConfig.server?.proxy || {}),
         ...(rawServer.proxy || {}),
       },
@@ -959,18 +710,12 @@ export function defineConfig(configOrFactory: ConfigFactory | UserConfig) {
       server.proxy['/api'] = { target: cliOpts.proxy, changeOrigin: true };
     }
 
-    const resolvedProxy = resolveServerProxy(server.proxy, root);
-    server.proxy = resolvedProxy;
-    const proxyRules = parseServerProxy(resolvedProxy);
+    const proxyRules = parseServerProxy(server.proxy);
 
-    const templateRewrites = resolveTemplateRewrites(root);
-    const existingRewrites = bunConfig.server?.rewrites || [];
-    const seenRewrites = new Set(existingRewrites.map((r) => r.from));
-    const rewrites = [
-      ...existingRewrites,
-      ...templateRewrites.filter((r) => !seenRewrites.has(r.from)),
-    ];
+    // Collect local rewrites contributed by plugins (e.g. proxyRedirects)
+    const rewrites = bunConfig.server?.rewrites || [];
 
+    // Translate Vite-only build keys and top-level extras into Bun.build() props
     const VITE_CORE_KEYS = new Set([
       'root', 'base', 'mode', 'define', 'publicDir', 'envDir', 'envPrefix',
       'server', 'build', 'preview', 'plugins', 'resolve', 'css', 'json',
