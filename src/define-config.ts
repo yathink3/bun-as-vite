@@ -1,5 +1,6 @@
 import path from 'path';
 import fs from 'fs';
+import zlib from 'zlib';
 import type { BunPlugin } from 'bun';
 import { MIME_TYPES } from './utils/mime';
 import { resolveStaticAsset } from './utils/assets';
@@ -259,6 +260,87 @@ function serveFile(filePath: string, { isPreview = false, isDev = false }: { isP
 
 // ─── build / dev / preview runners ───────────────────────────────────────────
 
+/**
+ * Scans outDir recursively and prints a Vite-style file table:
+ *   build/j/index-BK6Z54OP.js    31.75 kB │ gzip:  8.88 kB
+ */
+function logBuildOutputs(outDir: string): void {
+  // Collect all files recursively
+  const files: Array<{ rel: string; bytes: number; gzip: number }> = [];
+
+  function walk(dir: string): void {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir)) {
+      const full = path.join(dir, entry);
+      try {
+        const stat = fs.statSync(full);
+        if (stat.isDirectory()) {
+          walk(full);
+        } else {
+          const ext = path.extname(full).toLowerCase();
+          // Skip source-maps in the listing (show them dimmed below their source)
+          if (ext === '.map') return;
+          const rel = path.relative(outDir, full).replace(/\\/g, '/');
+          const raw = fs.readFileSync(full);
+          let gzipBytes = 0;
+          try { gzipBytes = zlib.gzipSync(raw).byteLength; } catch {}
+          files.push({ rel, bytes: stat.size, gzip: gzipBytes });
+        }
+      } catch {}
+    }
+  }
+
+  walk(outDir);
+
+  if (files.length === 0) return;
+
+  // Sort: JS first, then CSS, then assets, then HTML, rest
+  const order = (rel: string): number => {
+    const ext = path.extname(rel).toLowerCase();
+    if (ext === '.js' || ext === '.mjs') return 0;
+    if (ext === '.css') return 1;
+    if (['.png','.jpg','.jpeg','.svg','.gif','.webp','.ico','.avif',
+         '.ttf','.woff','.woff2','.eot'].includes(ext)) return 2;
+    if (ext === '.html') return 3;
+    return 4;
+  };
+  files.sort((a, b) => {
+    const od = order(a.rel) - order(b.rel);
+    return od !== 0 ? od : a.bytes - b.bytes;
+  });
+
+  // Format helpers
+  const fmt = (n: number): string => {
+    if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+    return `${(n / 1024).toFixed(2)} kB`;
+  };
+
+  // Determine column widths
+  const nameCol = Math.max(...files.map(f => f.rel.length), 10);
+  const sizeCol = Math.max(...files.map(f => fmt(f.bytes).length), 7);
+
+  // Extension → color
+  const extColor = (rel: string): ((s: string) => string) => {
+    const ext = path.extname(rel).toLowerCase();
+    if (ext === '.js' || ext === '.mjs') return colors.cyan;
+    if (ext === '.css') return colors.magenta;
+    if (ext === '.html') return colors.green;
+    return colors.yellow;
+  };
+
+  console.log();
+  for (const f of files) {
+    const nameStr  = `build/${f.rel}`.padEnd(nameCol + 6);
+    const sizeStr  = fmt(f.bytes).padStart(sizeCol);
+    const gzipStr  = fmt(f.gzip).padStart(sizeCol);
+    const colorFn  = extColor(f.rel);
+    console.log(
+      `  ${colorFn(nameStr)}  ${colors.dim(sizeStr)} ${colors.dim('│')} gzip: ${colors.dim(gzipStr)}`
+    );
+  }
+  console.log();
+}
+
 export async function runBuild(resolvedConfig: ResolvedConfig): Promise<void> {
   const { root, srcDir, publicDir, outDir, minify, define, plugins, bunPlugin } = resolvedConfig;
   const t0 = Date.now();
@@ -327,8 +409,6 @@ export async function runBuild(resolvedConfig: ResolvedConfig): Promise<void> {
   }
 
   const elapsedMs = Date.now() - t0;
-  logBox(`[bun-as-vite:build] Built ${buildResult.outputs.length} outputs in ${elapsedMs}ms`, 'success');
-  logStep('build', 'Output directory:', outDir);
 
   await runBuildCompleteHooks(plugins, buildResult, {
     outputs: buildResult.outputs,
@@ -336,6 +416,12 @@ export async function runBuild(resolvedConfig: ResolvedConfig): Promise<void> {
     mode: 'production',
     outDir,
   });
+
+  // Print file table AFTER buildComplete hooks (so j/c/a reorganisation is done)
+  logBuildOutputs(outDir);
+
+  logBox(`[bun-as-vite:build] Built ${buildResult.outputs.length} outputs in ${elapsedMs}ms`, 'success');
+  logStep('build', 'Output directory:', outDir);
 }
 
 export async function runPreview(resolvedConfig: ResolvedConfig): Promise<void> {
