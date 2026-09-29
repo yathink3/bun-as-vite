@@ -400,6 +400,17 @@ export async function runBuild(resolvedConfig: ResolvedConfig): Promise<void> {
       ? 'external'
       : (resolvedConfig.rawConfig?.build?.sourcemap as any) || 'none';
 
+  // Derive publicPath from the entry naming pattern so Bun's chunk import URLs
+  // match the actual file locations. Bun embeds chunk URLs as:
+  //   publicPath + chunkFilename  (strips the naming subdirectory)
+  // So if naming.entry = 'assets/[name]-[hash].[ext]', publicPath must be '/assets/'
+  // to make chunk URLs resolve to /assets/chunk-HASH.js where files actually live.
+  const namingEntry: string = resolvedConfig.naming?.entry || 'assets/[name]-[hash].[ext]';
+  const namingSubDir = namingEntry.includes('/') ? namingEntry.split('/')[0] : '';
+  const derivedPublicPath = namingSubDir ? `/${namingSubDir}/` : '/';
+  // Allow user to override via bunBuild.publicPath or extraBuildProps.publicPath
+  const publicPath: string = resolvedConfig.extraBuildProps?.publicPath ?? derivedPublicPath;
+
   const buildResult = await (Bun as any).build({
     entrypoints,
     plugins: [
@@ -413,7 +424,7 @@ export async function runBuild(resolvedConfig: ResolvedConfig): Promise<void> {
     splitting: resolvedConfig.splitting ?? true,
     sourcemap: sourcemapMode,
     naming: resolvedConfig.naming,
-    publicPath: '/',
+    publicPath,
     define: buildDefineMap(envVars, 'production', buildTimeUnix, define),
     ...resolvedConfig.extraBuildProps,
   });
@@ -585,6 +596,10 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
     const t0 = Date.now();
     const buildTimeUnix = Math.floor(t0 / 1000).toString();
     try {
+      const devNamingEntry: string = resolvedConfig.naming?.entry || 'assets/[name]-[hash].[ext]';
+      const devNamingSubDir = devNamingEntry.includes('/') ? devNamingEntry.split('/')[0] : '';
+      const devPublicPath: string = resolvedConfig.extraBuildProps?.publicPath ?? (devNamingSubDir ? `/${devNamingSubDir}/` : '/');
+
       const result = await (Bun as any).build({
         entrypoints,
         plugins: [
@@ -596,21 +611,26 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
         sourcemap: 'inline',
         splitting: resolvedConfig.splitting ?? true,
         naming: resolvedConfig.naming,
-        publicPath: '/',
+        publicPath: devPublicPath,
         define: buildDefineMap(loadEnvFile(root, 'development'), 'development', buildTimeUnix, define),
         ...resolvedConfig.extraBuildProps,
         outdir: devDir,
       });
 
       if (result.success) {
-        const groupNames = new Set((resolvedConfig.codeSplitGroups || []).map((g) => g.name));
+        const groupNames = new Set((resolvedConfig.codeSplitGroups || []).map((g: any) => g.name));
+        const isGroupEntry = (o: any): boolean => {
+          if (o.kind !== 'entry-point') return false;
+          const base      = path.basename(o.path, path.extname(o.path));
+          const cleanName = base.replace(/-[a-zA-Z0-9]+$/, ''); // case-insensitive hash strip
+          if (groupNames.has(cleanName) || groupNames.has(base)) return true;
+          if (o.path.includes('.bun-chunks')) return true;
+          if ([...groupNames].some((g: string) => cleanName === g || base.startsWith(g + '-'))) return true;
+          return false;
+        };
         const ep =
-          result.outputs.find((o: any) => {
-            if (o.kind !== 'entry-point') return false;
-            const base = path.basename(o.path, path.extname(o.path));
-            const cleanName = base.replace(/-[a-z0-9]+$/, '');
-            return !groupNames.has(cleanName) && !groupNames.has(base);
-          }) || result.outputs.find((o: any) => o.kind === 'entry-point');
+          result.outputs.find((o: any) => o.kind === 'entry-point' && !isGroupEntry(o)) ||
+          result.outputs.find((o: any) => o.kind === 'entry-point');
         if (ep) entryJs = '/' + path.relative(devDir, ep.path);
         logBox(`[bun-as-vite:dev] Rebuilt (${entryJs}) in ${Date.now() - t0}ms`, 'success');
         broadcast('data: reload\n\n');
