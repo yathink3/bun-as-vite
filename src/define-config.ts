@@ -4,6 +4,7 @@ import type { BunPlugin } from 'bun';
 import { MIME_TYPES } from './utils/mime';
 import { resolveStaticAsset } from './utils/assets';
 import { handleProxyRequest, logProxyRules, parseServerProxy } from './utils/proxy';
+import { logBox, logStep, colors } from './utils/logger';
 import { bunAsVite } from './plugins/bun-plugin';
 import { createBunConfig } from './plugins/shims';
 import type {
@@ -44,7 +45,7 @@ async function runConfigHooks(plugins: BavPlugin[], env: Omit<PluginContext, 'co
     try {
       await plugin.configBun({ config, ...env });
     } catch (err: any) {
-      console.error(`[bun-as-vite] Plugin "${plugin.name}" configBun hook failed:`, err.message);
+      logBox(`Plugin "${plugin.name}" configBun hook failed: ${err.message}`, 'error');
     }
   }
   return config;
@@ -63,7 +64,7 @@ async function runCssTransformHooks(
       const result = await plugin.cssTransform(css, filePath, root);
       if (typeof result === 'string') css = result;
     } catch (err: any) {
-      console.error(`[bun-as-vite] Plugin "${plugin.name}" cssTransform failed (${filePath}):`, err.message);
+      logBox(`Plugin "${plugin.name}" cssTransform failed (${filePath}): ${err.message}`, 'error');
     }
   }
   return css;
@@ -79,7 +80,7 @@ async function runBuildCompleteHooks(
     try {
       await plugin.buildComplete(result, ctx);
     } catch (err: any) {
-      console.error(`[bun-as-vite] Plugin "${plugin.name}" buildComplete hook failed:`, err.message);
+      logBox(`Plugin "${plugin.name}" buildComplete hook failed: ${err.message}`, 'error');
     }
   }
 }
@@ -95,7 +96,7 @@ async function runServerRequestHooks(
       const res = await plugin.serverRequest(req, ctx);
       if (res instanceof Response) return res;
     } catch (err: any) {
-      console.error(`[bun-as-vite] Plugin "${plugin.name}" serverRequest hook failed:`, err.message);
+      logBox(`Plugin "${plugin.name}" serverRequest hook failed: ${err.message}`, 'error');
     }
   }
   return null;
@@ -263,7 +264,7 @@ export async function runBuild(resolvedConfig: ResolvedConfig): Promise<void> {
   const t0 = Date.now();
   const buildTimeUnix = Math.floor(t0 / 1000).toString();
 
-  console.log(`\x1b[36mℹ  [bun-as-vite:build]\x1b[0m Starting production build with Bun…`);
+  logBox('[bun-as-vite:build] Starting production build with Bun…', 'info');
 
   if (fs.existsSync(outDir)) {
     fs.rmSync(outDir, { recursive: true, force: true });
@@ -297,14 +298,14 @@ export async function runBuild(resolvedConfig: ResolvedConfig): Promise<void> {
   });
 
   if (!buildResult.success) {
-    console.error('\x1b[31m✖  [bun-as-vite:build] Build failed:\x1b[0m');
+    logBox('[bun-as-vite:build] Build failed:', 'error');
     for (const log of buildResult.logs) console.error(log);
     process.exit(1);
   }
 
   if (fs.existsSync(publicDir)) {
     fs.cpSync(publicDir, outDir, { recursive: true });
-    console.log('\x1b[32m✔  [bun-as-vite:build]\x1b[0m Copied public/ → build/');
+    logBox('[bun-as-vite:build] Copied public/ → build/', 'success');
   }
 
   const indexHtmlPath = path.resolve(root, 'index.html');
@@ -322,14 +323,12 @@ export async function runBuild(resolvedConfig: ResolvedConfig): Promise<void> {
     const entryJs = ep ? '/' + path.relative(outDir, ep.path).replace(/\\/g, '/') : '/index.js';
     html = transformIndexHtml(html, { entryJs, buildTimeUnix, mode: 'production' });
     fs.writeFileSync(path.join(outDir, 'index.html'), html, 'utf-8');
-    console.log('\x1b[32m✔  [bun-as-vite:build]\x1b[0m Generated build/index.html');
+    logBox(`[bun-as-vite:build] Generated build/index.html`, 'success');
   }
 
   const elapsedMs = Date.now() - t0;
-  console.log(
-    `\x1b[32m✔  [bun-as-vite:build]\x1b[0m Built ${buildResult.outputs.length} outputs in ${elapsedMs}ms!`
-  );
-  console.log(`\x1b[36mℹ  [bun-as-vite:build]\x1b[0m Output directory: ${outDir}\n`);
+  logBox(`[bun-as-vite:build] Built ${buildResult.outputs.length} outputs in ${elapsedMs}ms`, 'success');
+  logStep('build', 'Output directory:', outDir);
 
   await runBuildCompleteHooks(plugins, buildResult, {
     outputs: buildResult.outputs,
@@ -345,7 +344,7 @@ export async function runPreview(resolvedConfig: ResolvedConfig): Promise<void> 
   const host = resolvedConfig.server?.host || resolvedConfig.host || '0.0.0.0';
 
   if (!fs.existsSync(outDir)) {
-    console.error(`\x1b[31m✖  No build found at "${outDir}". Run build first.\x1b[0m`);
+    logBox(`No build found at "${outDir}". Run build first.`, 'error');
     process.exit(1);
   }
 
@@ -391,8 +390,8 @@ export async function runPreview(resolvedConfig: ResolvedConfig): Promise<void> 
     },
   });
 
-  console.log(`\n\x1b[32m🚀  Bun Production Preview:\x1b[0m \x1b[36mhttp://localhost:${port}/\x1b[0m`);
-  console.log(`\x1b[90m    Serving: ${outDir} | Host: ${host}\x1b[0m\n`);
+  console.log(`\n${colors.green('🚀  Bun Production Preview:')} ${colors.cyan(`http://localhost:${port}/`)}`);
+  logStep('preview', 'Serving:', outDir, '|', 'Host:', host);
 }
 
 export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
@@ -468,14 +467,14 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
             return !groupNames.has(cleanName) && !groupNames.has(base);
           }) || result.outputs.find((o: any) => o.kind === 'entry-point');
         if (ep) entryJs = '/' + path.relative(devDir, ep.path);
-        console.log(`\x1b[32m✔  [bun-as-vite:dev]\x1b[0m Rebuilt (${entryJs}) in ${Date.now() - t0}ms`);
+        logBox(`[bun-as-vite:dev] Rebuilt (${entryJs}) in ${Date.now() - t0}ms`, 'success');
         broadcast('data: reload\n\n');
       } else {
-        console.error('\x1b[31m✖  [bun-as-vite:dev] Build failed:\x1b[0m');
+        logBox('[bun-as-vite:dev] Build failed:', 'error');
         for (const log of result.logs) console.error(log);
       }
     } catch (err: any) {
-      console.error('\x1b[31m✖  [bun-as-vite:dev] Build error:\x1b[0m', err);
+      logBox(`[bun-as-vite:dev] Build error: ${err.message || err}`, 'error');
     } finally {
       isBuilding = false;
     }
@@ -503,7 +502,7 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
   try {
     fs.watch(srcDir, { recursive: true }, trigger as any);
   } catch (err: any) {
-    console.warn('\x1b[33m⚠  [bun-as-vite:dev] Could not watch srcDir recursively:\x1b[0m', err.message);
+    logBox(`[bun-as-vite:dev] Could not watch srcDir recursively: ${err.message}`, 'warn');
   }
 
   function getIndexHtml(): string {
@@ -620,8 +619,8 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
     },
   });
 
-  console.log(`\n\x1b[32m🚀  Bun Dev Server:\x1b[0m \x1b[36mhttp://localhost:${port}/\x1b[0m`);
-  console.log(`\x1b[90m    Host: ${host} | HMR: WebSocket enabled\x1b[0m\n`);
+  console.log(`\n${colors.green('🚀  Bun Dev Server:')} ${colors.cyan(`http://localhost:${port}/`)}`);
+  logStep('dev', 'Host:', host, '|', 'HMR: WebSocket enabled');
 }
 
 // ─── defineConfig ─────────────────────────────────────────────────────────────
@@ -662,7 +661,7 @@ export function defineConfig(configOrFactory: ConfigFactory | UserConfig) {
               const out = await fn(css, filePath, root);
               if (typeof out === 'string') css = out;
             } catch (err: any) {
-              console.error('[bun-as-vite] cssTransformChain error:', err.message);
+              logBox(`cssTransformChain error: ${err.message}`, 'error');
             }
           }
           return runCssTransformHooks(plugins, css, filePath, root);

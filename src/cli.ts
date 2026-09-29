@@ -2,6 +2,7 @@
 import path from 'path';
 import fs from 'fs';
 import { parseCLIArgs, printHelp } from './utils/cli-args';
+import { logBox } from './utils/logger';
 
 export async function runCLI(argv: string[] = process.argv.slice(2)): Promise<void> {
   const cliArgs = parseCLIArgs(argv);
@@ -32,8 +33,8 @@ export async function runCLI(argv: string[] = process.argv.slice(2)): Promise<vo
   }
 
   if (!found) {
-    console.error('\x1b[31m✖  [bun-as-vite:cli] No config file found.\x1b[0m');
-    console.error('   Expected bun.config.js, bun-as-vite.config.ts, or vite.config.js in project root.');
+    logBox('[bun-as-vite:cli] No config file found.', 'error');
+    logBox('Expected bun.config.js, bun-as-vite.config.ts, or vite.config.js in project root.', 'error');
     process.exit(1);
   }
 
@@ -49,7 +50,7 @@ export async function runCLI(argv: string[] = process.argv.slice(2)): Promise<vo
 
 if (import.meta.main || process.argv[1]?.includes('cli')) {
   runCLI().catch((err) => {
-    console.error('[bun-as-vite] Error:', err);
+    logBox(`[bun-as-vite] Error: ${err?.message || err}`, 'error');
     process.exit(1);
   });
 }

@@ -1,4 +1,5 @@
 import { HOP_BY_HOP_HEADERS } from './mime';
+import { colors, colorMethod, colorStatus, formatTime, logStep, logBox } from './logger';
 
 export interface ParsedRedirectRule {
   prefix: string;
@@ -158,60 +159,32 @@ export function rewriteSetCookie(cookieStr: string): string {
     .trim();
 }
 
-function formatTime(): string {
-  return new Date().toLocaleTimeString('en-US', { hour12: true });
-}
-
-function colorMethod(method: string): string {
-  switch (method.toUpperCase()) {
-    case 'GET':
-      return `\x1b[34m${method}\x1b[0m`;
-    case 'POST':
-      return `\x1b[32m${method}\x1b[0m`;
-    case 'PUT':
-      return `\x1b[33m${method}\x1b[0m`;
-    case 'PATCH':
-      return `\x1b[35m${method}\x1b[0m`;
-    case 'DELETE':
-      return `\x1b[31m${method}\x1b[0m`;
-    case 'OPTIONS':
-      return `\x1b[90m${method}\x1b[0m`;
-    default:
-      return `\x1b[37m${method}\x1b[0m`;
-  }
-}
-
-function colorStatus(status: number, statusText: string = ''): string {
-  const text = statusText ? `${status} ${statusText}` : `${status}`;
-  if (status >= 200 && status < 300) return `\x1b[32m${text}\x1b[0m`;
-  if (status >= 300 && status < 400) return `\x1b[36m${text}\x1b[0m`;
-  if (status >= 400 && status < 500) return `\x1b[33m${text}\x1b[0m`;
-  return `\x1b[31m${text}\x1b[0m`;
-}
-
 /**
  * Logs registered proxy rewrite rules.
  */
 export function logProxyRules(rules: any[], rewrites: any[] = []): void {
+  const proxyRows: string[][] = [];
+  const spaRows: string[][] = [];
+
   if (rules && rules.length > 0) {
     for (const rule of rules) {
       const from = rule.displayKey || rule.prefix || (rule.regex ? rule.regex.toString() : '');
-      const to = rule.displayTarget || `${rule.targetBase}${rule.pathPart || ''}`;
-      console.log(
-        `  \x1b[36m↪\x1b[0m \x1b[90mproxy\x1b[0m \x1b[37m[REWRITE]\x1b[0m \x1b[36m${from}\x1b[0m \x1b[90m→\x1b[0m \x1b[35m${to}\x1b[0m`
-      );
+      const to   = rule.displayTarget || `${rule.targetBase}${rule.pathPart || ''}`;
+      proxyRows.push(['proxy', '[REWRITE]', from, '→', to]);
     }
   }
   if (rewrites && rewrites.length > 0) {
     for (const rw of rewrites) {
       if (rw.prefix === '/' || !rw.prefix) continue;
-      console.log(
-        `  \x1b[36m↪\x1b[0m \x1b[90mspa\x1b[0m   \x1b[37m[REWRITE]\x1b[0m \x1b[36m${rw.from}\x1b[0m \x1b[90m→\x1b[0m \x1b[32m${rw.to}\x1b[0m`
-      );
+      spaRows.push(['spa', '[REWRITE]', rw.from, '→', rw.to]);
     }
   }
-  if ((rules && rules.length > 0) || (rewrites && rewrites.length > 0)) {
-    console.log(`\x1b[32m✔\x1b[0m  \x1b[32mDevelopment redirects loaded\x1b[0m\n`);
+
+  for (const row of proxyRows) logStep(...row);
+  for (const row of spaRows)   logStep(...row);
+
+  if (proxyRows.length > 0 || spaRows.length > 0) {
+    logBox('Development redirects loaded', 'success');
   }
 }
 
@@ -269,12 +242,11 @@ export async function handleProxyRequest(
       targetUrl = `${rule.targetBase}${rule.pathPart.replace(/\/$/, '')}${url.search}`;
     }
 
-    const time = formatTime();
-
     // ── OPTIONS preflight ──────────────────────────────────────────────────
     if (req.method === 'OPTIONS') {
+      const time = formatTime();
       console.log(
-        `\x1b[90m${time}\x1b[0m \x1b[36m[proxy]\x1b[0m ${colorMethod('OPTIONS')} \x1b[33m${pathname}${url.search}\x1b[0m \x1b[90m→\x1b[0m \x1b[90m${targetUrl}\x1b[0m : \x1b[32m204 No Content\x1b[0m \x1b[90m(0ms)\x1b[0m`
+        `${colors.gray(time)} ${colors.cyan('[proxy]')} ${colorMethod('OPTIONS')} ${colors.yellow(pathname + url.search)} ${colors.gray('→')} ${colors.gray(targetUrl)} : ${colors.green('204 No Content')} ${colors.gray('(0ms)')}`
       );
       return new Response(null, {
         status: 204,
@@ -315,8 +287,9 @@ export async function handleProxyRequest(
       });
 
       const elapsed = Date.now() - startTime;
+      const time = formatTime();
       console.log(
-        `\x1b[90m${time}\x1b[0m \x1b[36m[proxy]\x1b[0m ${colorMethod(req.method)} \x1b[33m${pathname}${url.search}\x1b[0m \x1b[90m→\x1b[0m \x1b[90m${targetUrl}\x1b[0m : ${colorStatus(res.status, res.statusText)} \x1b[90m(${elapsed}ms)\x1b[0m`
+        `${colors.gray(time)} ${colors.cyan('[proxy]')} ${colorMethod(req.method)} ${colors.yellow(pathname + url.search)} ${colors.gray('→')} ${colors.gray(targetUrl)} : ${colorStatus(res.status, res.statusText)} ${colors.gray(`(${elapsed}ms)`)}`
       );
 
       // ── Build clean response headers ───────────────────────────────────
@@ -352,8 +325,9 @@ export async function handleProxyRequest(
       });
     } catch (err: any) {
       const elapsed = Date.now() - startTime;
+      const time = formatTime();
       console.error(
-        `\x1b[90m${time}\x1b[0m \x1b[31m[proxy ERROR]\x1b[0m ${req.method} ${pathname} → ${targetUrl} (${elapsed}ms):`,
+        `${colors.gray(time)} ${colors.red('[proxy ERROR]')} ${req.method} ${pathname} → ${targetUrl} ${colors.gray(`(${elapsed}ms)`)}:`,
         err.message
       );
       return new Response(`[bun-as-vite proxy error] ${err.message}`, {

@@ -1,4 +1,5 @@
 import type { BavPlugin, PluginContext, BuildCompleteContext } from '../types';
+import { logBox, logGrid, colors } from '../utils/logger';
 
 export interface BuildScorerPluginOptions {
   budgetKb?: number;
@@ -41,18 +42,22 @@ export function buildScorerPlugin(options: BuildScorerPluginOptions = {}): BavPl
       }
 
       const mb = (totalBytes / (1024 * 1024)).toFixed(2);
-      const [c, r, g, y, b] = ['\x1b[36m', '\x1b[0m', '\x1b[32m', '\x1b[33m', '\x1b[1m'];
 
-      console.log(`\n${b}${c}  ── Build Quality Report ──────────────────────────────────────${r}`);
-      console.log(`  ${g}✔${r}  ${b}Total bundle${r}: ${b}${mb} MB${r}  (${jsChunks} JS chunks, ${outputs.length} outputs)`);
-      console.log(`  ${g}✔${r}  ${b}Build time${r}:   ${b}${elapsedMs}ms${r}`);
+      logBox(colors.bold('── Build Quality Report ──'), 'info');
+      const rows: string[][] = [
+        ['Total bundle', `${mb} MB`, `(${jsChunks} JS chunks, ${outputs.length} outputs)`],
+        ['Build time',   `${elapsedMs}ms`, ''],
+      ];
+      logGrid('build-scorer', rows);
+
       if (largeChunks.length > 0) {
-        console.log(`  ${y}⚠${r}  ${y}Oversized chunks (>${budgetKb} KB):${r}`);
-        for (const ch of largeChunks) console.log(`       ${y}→${r} ${ch.name} — ${ch.kb} KB`);
+        logBox(`Oversized chunks (>${budgetKb} KB):`, 'warn');
+        for (const ch of largeChunks) {
+          logBox(`  → ${ch.name} — ${ch.kb} KB`, 'warn');
+        }
       } else {
-        console.log(`  ${g}✔${r}  All chunks within the ${budgetKb} KB budget`);
+        logBox(`All chunks within the ${budgetKb} KB budget`, 'success');
       }
-      console.log(`${b}${c}  ──────────────────────────────────────────────────────────────${r}\n`);
     },
   };
 }

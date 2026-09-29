@@ -1,6 +1,7 @@
 import path from 'path';
 import fs from 'fs';
 import { MIME_TYPES } from '../utils/mime';
+import { logBox, logStep } from '../utils/logger';
 import type { BavPlugin, PluginContext, BuildCompleteContext, ServerRequestContext, LocalRewriteRule } from '../types';
 
 /**
@@ -465,12 +466,12 @@ export function proxyRedirectsPlugin(options: ProxyRedirectsPluginOptions = {}):
             writeNginxRedirects(lines, activeEnvMap, nginxPath);
             successMessage = `Wrote Nginx config snippet to ${nginxPath}`;
           } else {
-            console.warn(`\x1b[33m[bun-as-vite:proxy-redirects] Unknown deploy platform: ${platform}. Set DEPLOY_PLATFORM=netlify|vercel|nginx\x1b[0m`);
+            logBox(`Unknown deploy platform: ${platform}. Set DEPLOY_PLATFORM=netlify|vercel|nginx`, 'warn');
             return;
           }
-          console.log(`\x1b[32m✔  [bun-as-vite:proxy-redirects]\x1b[0m ${successMessage}`);
+          logBox(successMessage, 'success');
         } catch (e: any) {
-          console.error(`\x1b[31m✖  [bun-as-vite:proxy-redirects] Failed writing redirects: ${e.message}\x1b[0m`);
+          logBox(`Failed writing redirects: ${e.message}`, 'error');
         }
       }
     },

@@ -18,6 +18,16 @@ export {
   wrapPlugin,
 } from './plugins/index';
 
+export {
+  default as logger,
+  logBox,
+  logStep,
+  logGrid,
+  createSpinner,
+  colors,
+} from './utils/logger';
+export type { LogType } from './utils/logger';
+
 export type {
   BunConfig,
   UserConfig,

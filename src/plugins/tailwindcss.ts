@@ -1,4 +1,5 @@
 import path from 'path';
+import { logBox } from '../utils/logger';
 import type { BavPlugin, PluginContext } from '../types';
 
 export interface TailwindcssPluginOptions {
@@ -40,7 +41,7 @@ async function loadTailwindModules(projectRoot: string) {
     ]);
     return { compile: (m1 as any).compile, Scanner: (m2 as any).Scanner };
   } catch (err: any) {
-    console.warn(`\x1b[33m[bav:tailwindcss] Could not load @tailwindcss/node or @tailwindcss/oxide from ${projectRoot}: ${err.message}\x1b[0m`);
+    logBox(`Could not load @tailwindcss/node or @tailwindcss/oxide from ${projectRoot}: ${err.message}`, 'warn');
     return null;
   }
 }
@@ -116,7 +117,7 @@ export function tailwindcss(options: TailwindcssPluginOptions = {}): BavPlugin {
           const candidates = _scanner ? _scanner.scan() : [];
           return _compiler.build(candidates);
         } catch (err: any) {
-          console.error(`\x1b[31m[bav:tailwindcss] Compile error (${filePath}):\x1b[0m`, err.message);
+          logBox(`[bav:tailwindcss] Compile error (${filePath}): ${err.message}`, 'error');
           return rawCss;
         }
       });

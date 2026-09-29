@@ -2,6 +2,7 @@ import path from 'path';
 import fs from 'fs';
 import type { BunPlugin } from 'bun';
 import { rewriteCssUrls } from '../utils/assets';
+import { logBox } from '../utils/logger';
 
 const JS_EXTENSIONS = ['', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.json', '.css'];
 const INDEX_EXTENSIONS = [
@@ -223,7 +224,7 @@ export function bunAsVite(options: BunAsViteOptions = {}): BunPlugin {
               const transformed = await cssTransform(rawCss, args.path);
               if (typeof transformed === 'string') rawCss = transformed;
             } catch (err) {
-              console.error(`[bun-as-vite] CSS transform error (${args.path}):`, err);
+              logBox(`CSS transform error (${args.path}): ${err}`, 'error');
             }
           }
 
