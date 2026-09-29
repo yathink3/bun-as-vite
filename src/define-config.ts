@@ -433,18 +433,32 @@ export async function runBuild(resolvedConfig: ResolvedConfig): Promise<void> {
   if (fs.existsSync(indexHtmlPath)) {
     let html = fs.readFileSync(indexHtmlPath, 'utf-8');
     const groupNames = new Set((resolvedConfig.codeSplitGroups || []).map((g) => g.name));
+
+    // Find the real app entry-point:
+    //  - must be kind === 'entry-point'
+    //  - must NOT be a codeSplitGroup named chunk (groupNames check)
+    //  - must NOT come from the temporary .bun-chunks virtual entry dir
+    //  - hash suffix uses uppercase hex (e.g. BK6Z54OP) — regex must be case-insensitive
+    const isGroupEntry = (o: any): boolean => {
+      if (o.kind !== 'entry-point') return false;
+      const base      = path.basename(o.path, path.extname(o.path));
+      const cleanName = base.replace(/-[a-zA-Z0-9]+$/, ''); // case-insensitive hash strip
+      if (groupNames.has(cleanName) || groupNames.has(base)) return true;
+      // Virtual entries written to .bun-chunks/ are always group entries
+      if (o.path.includes('.bun-chunks')) return true;
+      // If the base name (without hash) exactly matches a group name
+      if ([...groupNames].some(g => cleanName === g || base.startsWith(g + '-'))) return true;
+      return false;
+    };
+
     const ep =
-      buildResult.outputs.find((o: any) => {
-        if (o.kind !== 'entry-point') return false;
-        const base = path.basename(o.path, path.extname(o.path));
-        const cleanName = base.replace(/-[a-z0-9]+$/, '');
-        return !groupNames.has(cleanName) && !groupNames.has(base);
-      }) || buildResult.outputs.find((o: any) => o.kind === 'entry-point');
+      buildResult.outputs.find((o: any) => o.kind === 'entry-point' && !isGroupEntry(o)) ||
+      buildResult.outputs.find((o: any) => o.kind === 'entry-point');
 
     const entryJs = ep ? '/' + path.relative(outDir, ep.path).replace(/\\/g, '/') : '/index.js';
     html = transformIndexHtml(html, { entryJs, buildTimeUnix, mode: 'production' });
     fs.writeFileSync(path.join(outDir, 'index.html'), html, 'utf-8');
-    logBox(`[bun-as-vite:build] Generated build/index.html`, 'success');
+    logBox(`[bun-as-vite:build] Generated build/index.html → entry: ${entryJs}`, 'success');
   }
 
   const elapsedMs = Date.now() - t0;

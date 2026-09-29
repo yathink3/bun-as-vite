@@ -23,8 +23,11 @@ export interface CodeSplitPluginOptions {
    */
   codeSplitting?: { groups?: CodeSplitGroup[] };
   /**
-   * Output sub-directory name for JavaScript chunks.
-   * @default 'j'
+   * Output sub-directory name for JavaScript entry-point files.
+   * NOTE: Bun only embeds the naming subdirectory in import URLs for entry-points,
+   * NOT for auto-generated dynamic chunks. Do not set this if your app relies on
+   * React.lazy() or other dynamic imports — chunk URLs will omit the prefix and 404.
+   * Leave unset to use the default flat assets/ structure which is always safe.
    */
   jsDir?: string;
   /**
@@ -148,25 +151,26 @@ function findMatchingPackagesForGroups(groups: CodeSplitGroup[], root: string): 
 // ─── Plugin ───────────────────────────────────────────────────────────────────
 
 /**
- * Code-splitting & structured output plugin for Bun.build.
+ * Code-splitting plugin for Bun.build.
  *
- * Produces output layout matching vite-plugins-library's codeSplitPlugin:
- *   - JS chunks  ->  <outDir>/<jsDir>/     (default: j/)
- *   - CSS chunks ->  <outDir>/<cssDir>/    (default: c/)
- *   - Assets     ->  <outDir>/<assetDir>/  (default: a/)
+ * - Enables Bun's native code splitting (`splitting: true`)
+ * - Groups designated node_modules into named shared entry-point files via virtual
+ *   re-export stubs (.bun-chunks/), mirroring Vite's manualChunks behaviour.
  *
- * Groups node_modules into named shared chunks via virtual entry files,
- * mirroring Vite's manualChunks behaviour.
+ * ### Why no j/c/a directory naming for chunks?
+ *
+ * Bun embeds import() URLs at bundle time using:
+ *   `publicPath + chunkFilename`  (filename only, no subdir prefix)
+ *
+ * So setting `naming.chunk = 'j/[name]-[hash].js'` writes the file to `j/` but
+ * generates import URLs as `/[name]-[hash].js` (no j/) — causing 404s on deploy.
+ * Entry-points ARE correctly prefixed because their URLs come from index.html, not
+ * embedded imports. Chunks (React.lazy splits, dynamic import()) must stay flat.
+ *
+ * If you pass `jsDir`, it is applied only to the naming.entry pattern (group
+ * entry-point files). Chunks always use the flat default from the shims config.
  */
 export function codeSplitPlugin(options: CodeSplitPluginOptions = {}): BavPlugin {
-  const jsDir    = (options.jsDir    || 'j').replace(/\/+$/, '');
-  const cssDir   = (options.cssDir   || 'c').replace(/\/+$/, '');
-  const assetDir = (options.assetDir || 'a').replace(/\/+$/, '');
-
-  const safeExts    = options.safeExtensions ? new Set(options.safeExtensions) : DEFAULT_SAFE_EXTS;
-  const maxAssetLen = options.maxAssetChunkNameLength ?? 25;
-  const maxJsLen    = options.maxJsChunkNameLength    ?? 20;
-
   const groups: CodeSplitGroup[] = options.groups || options.codeSplitting?.groups || [];
 
   // Track chunk-dir path so buildComplete can clean it up
@@ -180,18 +184,16 @@ export function codeSplitPlugin(options: CodeSplitPluginOptions = {}): BavPlugin
       ctx.config.splitting = true;
       ctx.config.codeSplitGroups = groups;
 
-      // Set Bun naming patterns to place files in sub-directories.
-      // Bun naming tokens: [name], [hash], [ext]
-      ctx.config.naming = {
-        entry: `${jsDir}/[name]-[hash].[ext]`,
-        chunk: `${jsDir}/[name]-[hash].[ext]`,
-        asset: `${assetDir}/[name]-[hash].[ext]`,
-      };
+      // NOTE: We deliberately do NOT override naming.chunk or naming.asset here.
+      // Bun only propagates the naming subdirectory into the public URL for
+      // entry-point files; dynamic chunk import() URLs omit the prefix, causing
+      // the browser to fetch /chunk-HASH.js instead of /j/chunk-HASH.js.
+      // The shims default (assets/[name]-[hash].[ext]) is always safe.
 
       if (groups.length === 0) return;
 
-      // Create virtual entry files per group so Bun emits them as dedicated
-      // shared chunks — mirrors Vite manualChunks.
+      // Create virtual re-export entry files per group so Bun emits them as
+      // dedicated shared entry-point bundles — mirrors Vite manualChunks.
       chunkDir = path.resolve(ctx.root, '.bun-chunks');
       if (!fs.existsSync(chunkDir)) fs.mkdirSync(chunkDir, { recursive: true });
 
@@ -214,88 +216,10 @@ export function codeSplitPlugin(options: CodeSplitPluginOptions = {}): BavPlugin
     },
 
     // ── buildComplete ─────────────────────────────────────────────────────────
-    buildComplete(result: any, ctx: BuildCompleteContext) {
-      const outDir = ctx.outDir || path.resolve(process.cwd(), 'build');
-
-      // ── Reorganise output files into j / c / a sub-directories ─────────────
-      try {
-        const allOutputs: Array<{ path: string; kind: string }> =
-          result?.outputs ?? ctx.outputs ?? [];
-
-        for (const out of allOutputs) {
-          if (!out?.path) continue;
-          const filePath = out.path;
-          if (!fs.existsSync(filePath)) continue;
-
-          const ext    = path.extname(filePath).slice(1).toLowerCase();
-          const curDir = path.dirname(filePath);
-
-          // Skip files already in the right sub-directory
-          const relDir = path.relative(outDir, curDir);
-          if (relDir === jsDir || relDir === cssDir || relDir === assetDir) continue;
-
-          let targetSubDir: string;
-          let targetName: string;
-
-          if (ext === 'css') {
-            // CSS -> cssDir/<name>-<hash>.css
-            const nameRaw  = path.basename(filePath, '.css');
-            const hash     = nameRaw.match(/-([A-Z0-9]{8})$/i)?.[1] ?? '';
-            const namePart = nameRaw
-              .replace(/-[A-Z0-9]{8}$/i, '')
-              .slice(0, maxJsLen)
-              .toLowerCase();
-            targetSubDir = cssDir;
-            targetName   = hash ? `${namePart}-${hash}.css` : `${namePart}.css`;
-
-          } else if (ext === 'js' || ext === 'mjs') {
-            // JS -> jsDir/<name>-<hash>.js
-            const nameRaw  = path.basename(filePath, `.${ext}`);
-            const hash     = nameRaw.match(/-([A-Z0-9]{8})$/i)?.[1] ?? '';
-            const namePart = nameRaw
-              .replace(/-[A-Z0-9]{8}$/i, '')
-              .slice(0, maxJsLen)
-              .toLowerCase();
-            targetSubDir = jsDir;
-            targetName   = hash ? `${namePart}-${hash}.${ext}` : `${namePart}.${ext}`;
-
-          } else if (ext === 'map') {
-            // Source maps stay alongside their source — skip
-            continue;
-
-          } else if (safeExts.has(ext)) {
-            // Static assets -> assetDir/<name>.<ext>
-            const namePart = path
-              .basename(filePath, path.extname(filePath))
-              .replace(/-[A-Z0-9]{8}$/i, '')
-              .slice(0, maxAssetLen)
-              .toLowerCase();
-            targetSubDir = assetDir;
-            targetName   = `${namePart}.${ext}`;
-
-          } else {
-            continue; // unknown type — leave in place
-          }
-
-          const targetDirAbs = path.join(outDir, targetSubDir);
-          fs.mkdirSync(targetDirAbs, { recursive: true });
-
-          let dest = path.join(targetDirAbs, targetName);
-          // Avoid clobbering if names collide
-          if (fs.existsSync(dest)) {
-            dest = dest.replace(`.${ext}`, `-1.${ext}`);
-          }
-
-          fs.renameSync(filePath, dest);
-        }
-
-        // Clean up empty leftover directories inside outDir
-        _cleanEmptyDirs(outDir, outDir);
-      } catch {
-        // Non-fatal — reorganisation is best-effort
-      }
-
-      // ── Remove temporary .bun-chunks dir ───────────────────────────────────
+    buildComplete(_result: any, ctx: BuildCompleteContext) {
+      // Only clean up the temporary .bun-chunks virtual entry directory.
+      // We do NOT move any output files because Bun bakes import() URLs at
+      // build time. Moving files post-build would break those embedded URLs.
       const resolvedChunkDir = chunkDir || path.resolve(
         ctx.outDir ? path.dirname(ctx.outDir) : process.cwd(),
         '.bun-chunks',
@@ -305,19 +229,6 @@ export function codeSplitPlugin(options: CodeSplitPluginOptions = {}): BavPlugin
       }
     },
   };
-}
-
-/** Recursively remove empty directories inside `root`, leaving `root` itself. */
-function _cleanEmptyDirs(dir: string, root: string): void {
-  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return;
-  for (const entry of fs.readdirSync(dir)) {
-    _cleanEmptyDirs(path.join(dir, entry), root);
-  }
-  if (dir !== root) {
-    try {
-      if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
-    } catch {}
-  }
 }
 
 export default codeSplitPlugin;
