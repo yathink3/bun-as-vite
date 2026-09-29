@@ -71,13 +71,38 @@ async function runCssTransformHooks(
   return css;
 }
 
-async function runBuildCompleteHooks(
+/**
+ * Phase 1 — reorganisation hooks: only plugins whose name starts with 'bav:code-split'.
+ * These must run before the file table is printed so files are in their final j/c/a locations.
+ */
+async function runReorgHooks(
   plugins: BavPlugin[],
   result: any,
   ctx: { outputs: any[]; elapsedMs: number; mode: string; outDir: string }
 ): Promise<void> {
   for (const plugin of plugins) {
     if (!plugin || typeof plugin.buildComplete !== 'function') continue;
+    if (!plugin.name?.startsWith('bav:code-split')) continue;
+    try {
+      await plugin.buildComplete(result, ctx);
+    } catch (err: any) {
+      logBox(`Plugin "${plugin.name}" buildComplete (reorg) failed: ${err.message}`, 'error');
+    }
+  }
+}
+
+/**
+ * Phase 2 — display hooks: all plugins except bav:code-split.
+ * These run after the file table so build-scorer and others appear below the file listing.
+ */
+async function runDisplayHooks(
+  plugins: BavPlugin[],
+  result: any,
+  ctx: { outputs: any[]; elapsedMs: number; mode: string; outDir: string }
+): Promise<void> {
+  for (const plugin of plugins) {
+    if (!plugin || typeof plugin.buildComplete !== 'function') continue;
+    if (plugin.name?.startsWith('bav:code-split')) continue;
     try {
       await plugin.buildComplete(result, ctx);
     } catch (err: any) {
@@ -263,10 +288,12 @@ function serveFile(filePath: string, { isPreview = false, isDev = false }: { isP
 /**
  * Scans outDir recursively and prints a Vite-style file table:
  *   build/j/index-BK6Z54OP.js    31.75 kB │ gzip:  8.88 kB
+ *
+ * Gzip sizes are computed in parallel for speed.
  */
-function logBuildOutputs(outDir: string): void {
-  // Collect all files recursively
-  const files: Array<{ rel: string; bytes: number; gzip: number }> = [];
+async function logBuildOutputs(outDir: string): Promise<void> {
+  // ── 1. Collect all non-map files recursively ──────────────────────────────
+  const filePaths: string[] = [];
 
   function walk(dir: string): void {
     if (!fs.existsSync(dir)) return;
@@ -276,32 +303,46 @@ function logBuildOutputs(outDir: string): void {
         const stat = fs.statSync(full);
         if (stat.isDirectory()) {
           walk(full);
-        } else {
-          const ext = path.extname(full).toLowerCase();
-          // Skip source-maps in the listing (show them dimmed below their source)
-          if (ext === '.map') return;
-          const rel = path.relative(outDir, full).replace(/\\/g, '/');
-          const raw = fs.readFileSync(full);
-          let gzipBytes = 0;
-          try { gzipBytes = zlib.gzipSync(raw).byteLength; } catch {}
-          files.push({ rel, bytes: stat.size, gzip: gzipBytes });
+        } else if (path.extname(full).toLowerCase() !== '.map') {
+          filePaths.push(full);
         }
       } catch {}
     }
   }
-
   walk(outDir);
 
-  if (files.length === 0) return;
+  if (filePaths.length === 0) return;
 
-  // Sort: JS first, then CSS, then assets, then HTML, rest
+  // ── 2. Read + gzip all files in parallel ──────────────────────────────────
+  const gzipAsync = (buf: Buffer): Promise<number> =>
+    new Promise((resolve) => {
+      zlib.gzip(buf, { level: 9 }, (_, result) => resolve(result?.byteLength ?? 0));
+    });
+
+  const fileData = await Promise.all(
+    filePaths.map(async (filePath) => {
+      try {
+        const raw   = fs.readFileSync(filePath);
+        const bytes = raw.byteLength;
+        const gzip  = await gzipAsync(raw);
+        const rel   = path.relative(outDir, filePath).replace(/\\/g, '/');
+        return { rel, bytes, gzip };
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  const files = fileData.filter(Boolean) as Array<{ rel: string; bytes: number; gzip: number }>;
+
+  // ── 3. Sort: JS → CSS → assets → HTML → rest (by size within each group) ──
   const order = (rel: string): number => {
     const ext = path.extname(rel).toLowerCase();
     if (ext === '.js' || ext === '.mjs') return 0;
-    if (ext === '.css') return 1;
+    if (ext === '.css')                  return 1;
     if (['.png','.jpg','.jpeg','.svg','.gif','.webp','.ico','.avif',
          '.ttf','.woff','.woff2','.eot'].includes(ext)) return 2;
-    if (ext === '.html') return 3;
+    if (ext === '.html')                 return 3;
     return 4;
   };
   files.sort((a, b) => {
@@ -309,31 +350,29 @@ function logBuildOutputs(outDir: string): void {
     return od !== 0 ? od : a.bytes - b.bytes;
   });
 
-  // Format helpers
+  // ── 4. Format and print ───────────────────────────────────────────────────
   const fmt = (n: number): string => {
     if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(2)} MB`;
     return `${(n / 1024).toFixed(2)} kB`;
   };
 
-  // Determine column widths
   const nameCol = Math.max(...files.map(f => f.rel.length), 10);
   const sizeCol = Math.max(...files.map(f => fmt(f.bytes).length), 7);
 
-  // Extension → color
   const extColor = (rel: string): ((s: string) => string) => {
     const ext = path.extname(rel).toLowerCase();
     if (ext === '.js' || ext === '.mjs') return colors.cyan;
-    if (ext === '.css') return colors.magenta;
+    if (ext === '.css')  return colors.magenta;
     if (ext === '.html') return colors.green;
     return colors.yellow;
   };
 
   console.log();
   for (const f of files) {
-    const nameStr  = `build/${f.rel}`.padEnd(nameCol + 6);
-    const sizeStr  = fmt(f.bytes).padStart(sizeCol);
-    const gzipStr  = fmt(f.gzip).padStart(sizeCol);
-    const colorFn  = extColor(f.rel);
+    const nameStr = `build/${f.rel}`.padEnd(nameCol + 6);
+    const sizeStr = fmt(f.bytes).padStart(sizeCol);
+    const gzipStr = fmt(f.gzip).padStart(sizeCol);
+    const colorFn = extColor(f.rel);
     console.log(
       `  ${colorFn(nameStr)}  ${colors.dim(sizeStr)} ${colors.dim('│')} gzip: ${colors.dim(gzipStr)}`
     );
@@ -409,16 +448,16 @@ export async function runBuild(resolvedConfig: ResolvedConfig): Promise<void> {
   }
 
   const elapsedMs = Date.now() - t0;
+  const hookCtx = { outputs: buildResult.outputs, elapsedMs, mode: 'production', outDir };
 
-  await runBuildCompleteHooks(plugins, buildResult, {
-    outputs: buildResult.outputs,
-    elapsedMs,
-    mode: 'production',
-    outDir,
-  });
+  // Phase 1: reorganisation hooks (bav:code-split) — move files to j/c/a dirs
+  await runReorgHooks(plugins, buildResult, hookCtx);
 
-  // Print file table AFTER buildComplete hooks (so j/c/a reorganisation is done)
-  logBuildOutputs(outDir);
+  // Phase 2: print file table (files are now in their final locations)
+  await logBuildOutputs(outDir);
+
+  // Phase 3: display hooks (build-scorer Quality Report, etc.) appear below file table
+  await runDisplayHooks(plugins, buildResult, hookCtx);
 
   logBox(`[bun-as-vite:build] Built ${buildResult.outputs.length} outputs in ${elapsedMs}ms`, 'success');
   logStep('build', 'Output directory:', outDir);
