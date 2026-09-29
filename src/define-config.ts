@@ -390,8 +390,14 @@ export async function runPreview(resolvedConfig: ResolvedConfig): Promise<void> 
     },
   });
 
+  const explicitHost = host !== '0.0.0.0';
+
   console.log(`\n${colors.green('🚀  Bun Production Preview:')} ${colors.cyan(`http://localhost:${port}/`)}`);
-  logStep('preview', 'Serving:', outDir, '|', 'Host:', host);
+  if (explicitHost) {
+    logStep('preview', 'Serving:', outDir, '|', 'Host:', host);
+  } else {
+    logStep('preview', 'Serving:', outDir);
+  }
 }
 
 export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
@@ -619,8 +625,14 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
     },
   });
 
+  const explicitHost = host !== '0.0.0.0';
+
   console.log(`\n${colors.green('🚀  Bun Dev Server:')} ${colors.cyan(`http://localhost:${port}/`)}`);
-  logStep('dev', 'Host:', host, '|', 'HMR: WebSocket enabled');
+  if (explicitHost) {
+    logStep('dev', 'Host:', host, '|', 'HMR: WebSocket enabled');
+  } else {
+    logStep('dev', 'HMR: WebSocket enabled');
+  }
 }
 
 // ─── defineConfig ─────────────────────────────────────────────────────────────
