@@ -291,6 +291,7 @@ export async function runBuild(resolvedConfig: ResolvedConfig): Promise<void> {
     splitting: resolvedConfig.splitting ?? true,
     sourcemap: sourcemapMode,
     naming: resolvedConfig.naming,
+    publicPath: '/',
     define: buildDefineMap(envVars, 'production', buildTimeUnix, define),
     ...resolvedConfig.extraBuildProps,
   });
@@ -451,6 +452,7 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
         sourcemap: 'inline',
         splitting: resolvedConfig.splitting ?? true,
         naming: resolvedConfig.naming,
+        publicPath: '/',
         define: buildDefineMap(loadEnvFile(root, 'development'), 'development', buildTimeUnix, define),
         ...resolvedConfig.extraBuildProps,
         outdir: devDir,
