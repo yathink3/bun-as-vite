@@ -79,19 +79,63 @@ function readBaseUrl(root: string, srcDir: string): string | null {
   return srcDir;
 }
 
+/**
+ * Configuration options for the core `bunAsVite` plugin.
+ */
 export interface BunAsViteOptions {
+  /**
+   * Project root directory. Defaults to `process.cwd()`.
+   */
   root?: string;
+  /**
+   * Absolute or relative path to the application `src/` directory.
+   * Defaults to `${root}/src`.
+   */
   srcDir?: string;
+  /**
+   * Absolute or relative path to the public assets directory.
+   * Defaults to `${root}/public`.
+   */
   publicDir?: string;
+  /**
+   * Map of path aliases (e.g. `{ '@': './src' }`).
+   */
   alias?: Record<string, string>;
+  /**
+   * When true, automatically treats all subdirectories in `src/` as valid
+   * bare import specifiers (e.g. `import 'components/Button'`).
+   * @default false
+   */
   autoMapSrcFolders?: boolean;
+  /**
+   * Whether to transform CSS imports into dynamic DOM `<style>` injection modules.
+   * @default true
+   */
   injectCss?: boolean;
+  /**
+   * Optional async or synchronous CSS transformation hook (e.g. for Tailwind or PostCSS).
+   */
   cssTransform?: ((rawCss: string, filePath: string) => Promise<string | null> | string | null) | null;
 }
 
 /**
- * Creates the composable Bun plugin that handles Vite-compatible
- * module resolution, alias expansion, and CSS injection behaviour.
+ * Creates the core composable Bun plugin that handles Vite-compatible
+ * module resolution, alias expansion, root-relative CSS url rewriting,
+ * and CSS runtime DOM style injection.
+ *
+ * @param options Plugin options for root, aliases, src directories, and CSS handling.
+ * @returns Bun native plugin compatible with `Bun.build({ plugins: [...] })`.
+ *
+ * @example
+ * ```ts
+ * import { bunAsVite } from 'bun-as-vite';
+ *
+ * const plugin = bunAsVite({
+ *   root: process.cwd(),
+ *   alias: { '@': './src' },
+ *   injectCss: true,
+ * });
+ * ```
  */
 export function bunAsVite(options: BunAsViteOptions = {}): BunPlugin {
   const root = path.resolve(options.root || process.cwd());

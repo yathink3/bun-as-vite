@@ -16,6 +16,7 @@ import type {
   CLIOptions,
   ResolvedConfig,
   PluginContext,
+  BunAsViteConfigResult,
 } from './types';
 
 // ─── file extension sets ──────────────────────────────────────────────────────
@@ -380,6 +381,16 @@ async function logBuildOutputs(outDir: string): Promise<void> {
   console.log();
 }
 
+/**
+ * Runs a production build using `Bun.build(...)`.
+ *
+ * Compiles JavaScript and TypeScript, executes plugin transforms, resolves aliases,
+ * generates code-split chunks (if splitting is enabled), copies static public assets,
+ * injects asset links into `index.html`, and reports build time and bundle statistics.
+ *
+ * @param resolvedConfig Fully resolved configuration object.
+ * @returns Promise that resolves once the production build completes.
+ */
 export async function runBuild(resolvedConfig: ResolvedConfig): Promise<void> {
   const { root, srcDir, publicDir, outDir, minify, define, plugins, bunPlugin } = resolvedConfig;
   const t0 = Date.now();
@@ -514,6 +525,15 @@ function startBunServer(opts: any, mode: 'dev' | 'preview') {
   }
 }
 
+/**
+ * Runs a preview server using `Bun.serve(...)` to serve the production build output.
+ *
+ * Serves files from `outDir` (default `'build'`), handles client-side SPA routing,
+ * forwards requests matching configured proxy rules, and executes `serverRequest` plugin hooks.
+ *
+ * @param resolvedConfig Fully resolved configuration object.
+ * @returns Promise that resolves when the preview server starts listening.
+ */
 export async function runPreview(resolvedConfig: ResolvedConfig): Promise<void> {
   const { root, srcDir, publicDir, outDir, plugins } = resolvedConfig;
   const port = resolvedConfig.server?.port || resolvedConfig.port || 4545;
@@ -597,6 +617,18 @@ export async function runPreview(resolvedConfig: ResolvedConfig): Promise<void> 
   }
 }
 
+/**
+ * Runs the development server using `Bun.serve(...)` with fast rebuilds and live reload.
+ *
+ * Features:
+ * - Live module rebundling on file changes in `src/` and `public/`.
+ * - In-memory and fast file serving with WebSocket live-reload notification.
+ * - HTTP and WebSocket proxy forwarding for backend API routes.
+ * - Local SPA route rewrites and static asset streaming.
+ *
+ * @param resolvedConfig Fully resolved configuration object.
+ * @returns Promise that resolves when the dev server starts listening.
+ */
 export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
   const { root, srcDir, publicDir, outDir, define, plugins, bunPlugin } = resolvedConfig;
   const port = resolvedConfig.server?.port || resolvedConfig.port || 4545;
@@ -884,7 +916,33 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
 
 // ─── defineConfig ─────────────────────────────────────────────────────────────
 
-export function defineConfig(configOrFactory: ConfigFactory | UserConfig) {
+/**
+ * Defines the application configuration with full Vite compatibility, native Bun execution,
+ * and plugin lifecycle integration.
+ *
+ * Accepts either a configuration object or a factory function receiving `{ mode, command }`.
+ * Returns an object with `.run()`, `.resolve()`, and `.getRawConfig()` methods.
+ *
+ * @param configOrFactory User configuration object or factory function.
+ * @returns Config runner and resolver object with `run`, `resolve`, and `getRawConfig` methods.
+ *
+ * @example
+ * ```ts
+ * import { defineConfig } from 'bun-as-vite';
+ * import react from '@vitejs/plugin-react';
+ *
+ * export default defineConfig({
+ *   plugins: [react()],
+ *   server: {
+ *     port: 3000,
+ *     proxy: {
+ *       '/api': 'http://localhost:8080',
+ *     },
+ *   },
+ * });
+ * ```
+ */
+export function defineConfig(configOrFactory: ConfigFactory | UserConfig): BunAsViteConfigResult {
   function getRawConfig(env: { mode: string; command: string } = { mode: 'development', command: 'serve' }): UserConfig {
     return typeof configOrFactory === 'function' ? (configOrFactory as any)(env) || {} : configOrFactory || {};
   }
@@ -1038,17 +1096,19 @@ export function defineConfig(configOrFactory: ConfigFactory | UserConfig) {
   }
 
   async function run(cliOpts?: CLIOptions) {
+    let opts: CLIOptions = cliOpts || {};
     if (!cliOpts || Object.keys(cliOpts).length === 0) {
       const { parseCLIArgs, printHelp } = await import('./utils/cli-args');
-      cliOpts = parseCLIArgs();
-      if (cliOpts.help) {
+      const parsed = parseCLIArgs();
+      if (parsed.help) {
         printHelp();
         process.exit(0);
       }
+      opts = parsed;
     }
 
-    const resolved = await resolve(cliOpts);
-    switch (cliOpts.mode) {
+    const resolved = await resolve(opts);
+    switch (opts.mode) {
       case 'build':
         return runBuild(resolved);
       case 'preview':

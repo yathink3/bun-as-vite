@@ -4,6 +4,13 @@ import fs from 'fs';
 import { parseCLIArgs, printHelp } from './utils/cli-args';
 import { logBox } from './utils/logger';
 
+/**
+ * Main command line interface entry point for `bun-as-vite` (`bav`).
+ * Parses argv flags, locates the project config file, and runs the designated workflow.
+ *
+ * @param argv Command line argument array (defaults to `process.argv.slice(2)`).
+ * @returns Promise that resolves when command execution finishes.
+ */
 export async function runCLI(argv: string[] = process.argv.slice(2)): Promise<void> {
   const cliArgs = parseCLIArgs(argv);
 

@@ -48,7 +48,19 @@ export interface CodeSplitPluginOptions {
  * Vite's manualChunks, but this caused Bun to generate incorrect export
  * bindings in shared chunks ("Export '$X' is not defined in module") under
  * minification due to how Bun handles namespace imports across multiple
- * entry-points. The virtual entry approach has been removed.
+ *
+ * @param options Plugin configuration options (groups, codeSplitting).
+ * @returns Bun-as-Vite code splitting plugin.
+ *
+ * @example
+ * ```ts
+ * import { defineConfig } from 'bun-as-vite';
+ * import { codeSplitPlugin } from 'bun-as-vite/code-split';
+ *
+ * export default defineConfig({
+ *   plugins: [codeSplitPlugin()],
+ * });
+ * ```
  */
 export function codeSplitPlugin(options: CodeSplitPluginOptions = {}): BavPlugin {
   const groups: CodeSplitGroup[] = options.groups || options.codeSplitting?.groups || [];

@@ -1,14 +1,40 @@
 import type { BavPlugin, PluginContext, BuildCompleteContext } from '../types';
 import { logBox, logGrid, colors } from '../utils/logger';
 
+/**
+ * Configuration options for the buildScorer plugin.
+ */
 export interface BuildScorerPluginOptions {
+  /**
+   * Maximum allowed size in kilobytes for individual JavaScript chunks before a warning is logged.
+   * @default 800
+   */
   budgetKb?: number;
+  /**
+   * Arbitrary additional scorer options.
+   */
   [key: string]: any;
 }
 
 /**
- * Build scorer plugin.
- * Audits total bundle size and flags oversized chunks after build completion.
+ * Build quality audit and chunk scoring plugin for Bun-as-Vite.
+ * Audits emitted bundle chunks upon build completion, calculates total bundle size,
+ * build elapsed time, and highlights chunks exceeding the configured budget threshold.
+ *
+ * @param options Plugin options (budgetKb threshold).
+ * @returns Bun-as-Vite build scorer plugin.
+ *
+ * @example
+ * ```ts
+ * import { defineConfig } from 'bun-as-vite';
+ * import { buildScorerPlugin } from 'bun-as-vite/build-scorer';
+ *
+ * export default defineConfig({
+ *   plugins: [
+ *     buildScorerPlugin({ budgetKb: 500 }),
+ *   ],
+ * });
+ * ```
  */
 export function buildScorerPlugin(options: BuildScorerPluginOptions = {}): BavPlugin {
   const budgetKb = options.budgetKb || 800;

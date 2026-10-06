@@ -1,3 +1,12 @@
+/**
+ * bun-as-vite
+ *
+ * Run Vite-configured React and web apps on Bun natively with zero config rewrite.
+ * Full drop-in replacement for Vite defineConfig with Bun.build and Bun.serve.
+ *
+ * @module bun-as-vite
+ */
+
 export {
   defineConfig,
   default as default,
@@ -40,4 +49,6 @@ export type {
   ServerRequestContext,
   CodeSplitGroup,
   ProxyRule,
+  BunAsViteConfigResult,
 } from './types';
+

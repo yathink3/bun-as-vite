@@ -1,7 +1,10 @@
 import type { BunConfig, BavPlugin } from '../types';
 
 /**
- * Creates the mutable BunConfig object passed to every `configBun` hook.
+ * Creates the initial mutable BunConfig object passed through the `configBun` plugin pipeline.
+ * Initializes default aliases, entrypoint, code splitting, sourcemaps, and naming templates.
+ *
+ * @returns Initialized BunConfig instance with default values.
  */
 export function createBunConfig(): BunConfig {
   return {
@@ -30,8 +33,12 @@ export function createBunConfig(): BunConfig {
 }
 
 /**
- * Wraps any arbitrary object as a bun-as-vite plugin.
- * Forwards only the recognised lifecycle hooks.
+ * Wraps an arbitrary object or third-party Vite plugin as a `BavPlugin`.
+ * Forwards only recognized lifecycle hooks (`configBun`, `cssTransform`, `buildComplete`, `serverRequest`).
+ *
+ * @param plugin Plugin object to wrap.
+ * @returns Normalized `BavPlugin` object.
+ * @throws TypeError if `plugin` is not an object.
  */
 export function wrapPlugin(plugin: any): BavPlugin {
   if (!plugin || typeof plugin !== 'object') {

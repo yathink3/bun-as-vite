@@ -2,15 +2,26 @@ import path from 'path';
 import { logBox } from '../utils/logger';
 import type { BavPlugin, PluginContext } from '../types';
 
+/**
+ * Configuration options for the Tailwind CSS v4 JIT compilation plugin.
+ */
 export interface TailwindcssPluginOptions {
   /**
-   * Additional source patterns for scanning Tailwind candidate classes.
+   * Additional glob patterns for scanning source files for Tailwind candidate classes.
+   * By default, scans `${srcDir}/**\/*.{jsx,js,tsx,ts,html}` and root `index.html`.
    */
   sources?: string[];
   /**
-   * Optional custom entry file or filter function.
+   * Custom filter predicate to determine if a CSS file should be transformed by Tailwind CSS.
+   *
+   * @param filePath Absolute path of the CSS file.
+   * @param rawCss The raw CSS file content.
+   * @returns `true` if the file should be compiled by Tailwind, `false` otherwise.
    */
   filter?: (filePath: string, rawCss: string) => boolean;
+  /**
+   * Arbitrary additional options forwarded to the Tailwind compiler.
+   */
   [key: string]: any;
 }
 
@@ -67,7 +78,24 @@ function isTailwindCss(filePath: string, rawCss: string): boolean {
 }
 
 /**
- * Tailwind CSS v4 JIT compilation plugin.
+ * Tailwind CSS v4 JIT compilation plugin for Bun-as-Vite.
+ *
+ * Automatically detects Tailwind CSS imports and directives (`@theme`, `@utility`, `@import "tailwindcss"`),
+ * scans source code using `@tailwindcss/oxide` Scanner, and generates JIT compiled utility CSS
+ * using `@tailwindcss/node` compile API during dev and production build.
+ *
+ * @param options Optional configuration for source scanning and file filtering.
+ * @returns Bun-as-Vite plugin instance.
+ *
+ * @example
+ * ```ts
+ * import { defineConfig } from 'bun-as-vite';
+ * import tailwindcss from 'bun-as-vite/tailwindcss';
+ *
+ * export default defineConfig({
+ *   plugins: [tailwindcss()],
+ * });
+ * ```
  */
 export function tailwindcss(options: TailwindcssPluginOptions = {}): BavPlugin {
   let _compile: any = null;

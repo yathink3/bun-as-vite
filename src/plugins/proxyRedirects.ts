@@ -330,12 +330,31 @@ function handleLocalRewrite(
 // ─────────────── plugin ───────────────
 
 /**
- * Proxy redirects plugin.
+ * Proxy redirects plugin for Bun-as-Vite.
  *
  * Responsibilities (all self-contained):
- *  - Reads `redirects.template` and populates `config.server.proxy` + `config.server.rewrites`
- *  - Handles SPA local rewrites (sub-app detection, static file serving) via the `serverRequest` hook
- *  - Writes deployment redirect files (Netlify / Vercel / Nginx) via the `buildComplete` hook
+ *  - Reads `redirects.template` and populates `config.server.proxy` + `config.server.rewrites`.
+ *  - Handles SPA local rewrites (sub-app detection, static file serving) via the `serverRequest` hook.
+ *  - Writes deployment redirect files (Netlify `_redirects` / Vercel `vercel.json` / Nginx snippet)
+ *    via the `buildComplete` hook.
+ *
+ * @param options Plugin configuration options (templateFile, proxy, envMap, deployPlatform, etc.).
+ * @returns Bun-as-Vite proxy redirects plugin.
+ *
+ * @example
+ * ```ts
+ * import { defineConfig } from 'bun-as-vite';
+ * import proxyRedirects from 'bun-as-vite/proxy-redirects';
+ *
+ * export default defineConfig({
+ *   plugins: [
+ *     proxyRedirects({
+ *       templateFile: 'redirects.template',
+ *       deployPlatform: 'netlify',
+ *     }),
+ *   ],
+ * });
+ * ```
  */
 export function proxyRedirectsPlugin(options: ProxyRedirectsPluginOptions = {}): BavPlugin {
   const {
