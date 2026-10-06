@@ -602,16 +602,10 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
   const port = resolvedConfig.server?.port || resolvedConfig.port || 4545;
   const host = resolvedConfig.server?.host || resolvedConfig.host || '0.0.0.0';
 
-  checkPortAvailable(port, host);
-
   const devDir = path.resolve(root, '.bun-dev');
-
-  if (fs.existsSync(devDir)) fs.rmSync(devDir, { recursive: true, force: true });
-  fs.mkdirSync(devDir, { recursive: true });
-
+  const indexHtmlPath = path.resolve(root, 'index.html');
   const proxyRules = resolvedConfig.proxyRules || [];
   const rewrites = resolvedConfig.rewrites || [];
-  logProxyRules(proxyRules, rewrites);
 
   let entryJs = '';
   let isBuilding = false;
@@ -694,33 +688,17 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
       logBox(`[bun-as-vite:dev] Build error: ${err.message || err}`, 'error');
     } finally {
       isBuilding = false;
+      if (initialBuildResolve) {
+        initialBuildResolve();
+        initialBuildResolve = null;
+      }
     }
   }
 
-  await rebuild();
-
-  const indexHtmlPath = path.resolve(root, 'index.html');
-
-  let debounce: any = null;
-  const trigger = (_event: string, filename?: string) => {
-    if (!filename) {
-      clearTimeout(debounce);
-      debounce = setTimeout(() => rebuild(), 150);
-      return;
-    }
-    const base = path.basename(filename);
-    if (base.startsWith('.') || base.startsWith('~') || base.endsWith('.tmp') || base.endsWith('~')) return;
-    const ext = path.extname(filename).toLowerCase();
-    if (ext && !WATCH_EXTS.has(ext)) return;
-    clearTimeout(debounce);
-    debounce = setTimeout(() => rebuild(), 150);
-  };
-
-  try {
-    fs.watch(srcDir, { recursive: true }, trigger as any);
-  } catch (err: any) {
-    logBox(`[bun-as-vite:dev] Could not watch srcDir recursively: ${err.message}`, 'warn');
-  }
+  let initialBuildResolve: (() => void) | null = null;
+  const initialBuildPromise = new Promise<void>((resolve) => {
+    initialBuildResolve = resolve;
+  });
 
   function getIndexHtml(): string {
     const buildTimeUnix = Math.floor(Date.now() / 1000).toString();
@@ -734,6 +712,8 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
     port,
     hostname: host,
     async fetch(req: Request, server: any) {
+      if (initialBuildResolve) await initialBuildPromise;
+
       const url = new URL(req.url);
       const pathname = url.pathname;
 
@@ -862,6 +842,35 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
       },
     },
   }, 'dev');
+
+  // Once server port is acquired without error, proceed with dev setup
+  if (fs.existsSync(devDir)) fs.rmSync(devDir, { recursive: true, force: true });
+  fs.mkdirSync(devDir, { recursive: true });
+
+  logProxyRules(proxyRules, rewrites);
+
+  await rebuild();
+
+  let debounce: any = null;
+  const trigger = (_event: string, filename?: string) => {
+    if (!filename) {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => rebuild(), 150);
+      return;
+    }
+    const base = path.basename(filename);
+    if (base.startsWith('.') || base.startsWith('~') || base.endsWith('.tmp') || base.endsWith('~')) return;
+    const ext = path.extname(filename).toLowerCase();
+    if (ext && !WATCH_EXTS.has(ext)) return;
+    clearTimeout(debounce);
+    debounce = setTimeout(() => rebuild(), 150);
+  };
+
+  try {
+    fs.watch(srcDir, { recursive: true }, trigger as any);
+  } catch (err: any) {
+    logBox(`[bun-as-vite:dev] Could not watch srcDir recursively: ${err.message}`, 'warn');
+  }
 
   const explicitHost = host !== '0.0.0.0';
 
