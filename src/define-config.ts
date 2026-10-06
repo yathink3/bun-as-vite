@@ -400,16 +400,15 @@ export async function runBuild(resolvedConfig: ResolvedConfig): Promise<void> {
       ? 'external'
       : (resolvedConfig.rawConfig?.build?.sourcemap as any) || 'none';
 
-  // Derive publicPath from the entry naming pattern so Bun's chunk import URLs
-  // match the actual file locations. Bun embeds chunk URLs as:
-  //   publicPath + chunkFilename  (strips the naming subdirectory)
-  // So if naming.entry = 'assets/[name]-[hash].[ext]', publicPath must be '/assets/'
-  // to make chunk URLs resolve to /assets/chunk-HASH.js where files actually live.
-  const namingEntry: string = resolvedConfig.naming?.entry || 'assets/[name]-[hash].[ext]';
-  const namingSubDir = namingEntry.includes('/') ? namingEntry.split('/')[0] : '';
-  const derivedPublicPath = namingSubDir ? `/${namingSubDir}/` : '/';
-  // Allow user to override via bunBuild.publicPath or extraBuildProps.publicPath
-  const publicPath: string = resolvedConfig.extraBuildProps?.publicPath ?? derivedPublicPath;
+  // Derive publicPath: Bun prepends publicPath to the relative output path of chunks/assets.
+  // Because chunk/entry naming already includes the directory (e.g. 'assets/...'),
+  // publicPath must NOT duplicate that directory.
+  // Vite defaults base to '/'. If the user supplies base, normalize with leading/trailing slash.
+  const rawBase = resolvedConfig.rawConfig?.base;
+  const normalizedBase = rawBase
+    ? (rawBase.startsWith('/') ? rawBase : `/${rawBase}`).replace(/\/?$/, '/')
+    : '/';
+  const publicPath: string = resolvedConfig.extraBuildProps?.publicPath ?? normalizedBase;
 
   const buildResult = await (Bun as any).build({
     entrypoints,
@@ -488,6 +487,33 @@ export async function runBuild(resolvedConfig: ResolvedConfig): Promise<void> {
   logStep('build', 'Output directory:', outDir);
 }
 
+function handlePortError(err: any, port: number | string, mode: 'dev' | 'preview'): never {
+  if (
+    err?.code === 'EADDRINUSE' ||
+    String(err?.message || '').includes('EADDRINUSE') ||
+    String(err?.message || '').toLowerCase().includes('is port') ||
+    String(err?.message || '').toLowerCase().includes('in use')
+  ) {
+    logBox(`Port ${port} is already in use (EADDRINUSE).`, 'error');
+    console.log(`\n  ${colors.yellow('💡 Suggestion:')}`);
+    console.log(
+      `     • Stop the process using port ${colors.cyan(String(port))}: ${colors.dim(`lsof -i :${port}`)} then ${colors.dim('kill -9 <PID>')}`
+    );
+    console.log(`     • Or run with another port: ${colors.dim(`--port ${Number(port) + 1}`)}\n`);
+    process.exit(1);
+  }
+  logBox(`Failed to start ${mode} server: ${err?.message || err}`, 'error');
+  process.exit(1);
+}
+
+function startBunServer(opts: any, mode: 'dev' | 'preview') {
+  try {
+    return (Bun as any).serve(opts);
+  } catch (err: any) {
+    handlePortError(err, opts.port, mode);
+  }
+}
+
 export async function runPreview(resolvedConfig: ResolvedConfig): Promise<void> {
   const { root, srcDir, publicDir, outDir, plugins } = resolvedConfig;
   const port = resolvedConfig.server?.port || resolvedConfig.port || 4545;
@@ -500,9 +526,8 @@ export async function runPreview(resolvedConfig: ResolvedConfig): Promise<void> 
 
   const proxyRules = resolvedConfig.proxyRules || [];
   const rewrites = resolvedConfig.rewrites || [];
-  logProxyRules(proxyRules, rewrites);
 
-  (Bun as any).serve({
+  startBunServer({
     port,
     hostname: host,
     async fetch(req: Request) {
@@ -530,15 +555,37 @@ export async function runPreview(resolvedConfig: ResolvedConfig): Promise<void> 
         } catch {}
       }
 
+      // Resilient fallbacks for duplicate /assets/assets/ or direct /chunk- requests
+      if (pathname.startsWith('/assets/assets/')) {
+        const cleanDirect = path.join(outDir, pathname.replace(/^\/assets\/assets\//, '/assets/'));
+        if (fs.existsSync(cleanDirect) && !fs.statSync(cleanDirect).isDirectory()) {
+          return serveFile(cleanDirect, { isPreview: true });
+        }
+      }
+      if (pathname.startsWith('/chunk-')) {
+        const inAssets = path.join(outDir, 'assets', path.basename(pathname));
+        if (fs.existsSync(inAssets) && !fs.statSync(inAssets).isDirectory()) {
+          return serveFile(inAssets, { isPreview: true });
+        }
+      }
+
       const staticFallback = resolveStaticAsset(pathname, { root, srcDir, publicDir });
       if (staticFallback) return serveFile(staticFallback, { isPreview: true });
+
+      // Static assets (.js, .css, images, etc.) that do not exist should return 404, not index.html
+      const hasStaticExt = /\.(js|mjs|cjs|ts|tsx|jsx|css|json|wasm|png|jpe?g|gif|svg|ico|webp|woff2?|ttf|eot|otf|map|xlsx|pdf|txt)$/i.test(pathname);
+      if (hasStaticExt) {
+        return new Response('Not found', { status: 404 });
+      }
 
       const indexHtml = path.join(outDir, 'index.html');
       if (fs.existsSync(indexHtml)) return serveFile(indexHtml, { isPreview: true });
 
       return new Response('Not found', { status: 404 });
     },
-  });
+  }, 'preview');
+
+  logProxyRules(proxyRules, rewrites);
 
   const explicitHost = host !== '0.0.0.0';
 
@@ -554,6 +601,9 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
   const { root, srcDir, publicDir, outDir, define, plugins, bunPlugin } = resolvedConfig;
   const port = resolvedConfig.server?.port || resolvedConfig.port || 4545;
   const host = resolvedConfig.server?.host || resolvedConfig.host || '0.0.0.0';
+
+  checkPortAvailable(port, host);
+
   const devDir = path.resolve(root, '.bun-dev');
 
   if (fs.existsSync(devDir)) fs.rmSync(devDir, { recursive: true, force: true });
@@ -596,9 +646,11 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
     const t0 = Date.now();
     const buildTimeUnix = Math.floor(t0 / 1000).toString();
     try {
-      const devNamingEntry: string = resolvedConfig.naming?.entry || 'assets/[name]-[hash].[ext]';
-      const devNamingSubDir = devNamingEntry.includes('/') ? devNamingEntry.split('/')[0] : '';
-      const devPublicPath: string = resolvedConfig.extraBuildProps?.publicPath ?? (devNamingSubDir ? `/${devNamingSubDir}/` : '/');
+      const rawBase = resolvedConfig.rawConfig?.base;
+      const normalizedBase = rawBase
+        ? (rawBase.startsWith('/') ? rawBase : `/${rawBase}`).replace(/\/?$/, '/')
+        : '/';
+      const devPublicPath: string = resolvedConfig.extraBuildProps?.publicPath ?? normalizedBase;
 
       const result = await (Bun as any).build({
         entrypoints,
@@ -678,7 +730,7 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
     return html;
   }
 
-  (Bun as any).serve({
+  startBunServer({
     port,
     hostname: host,
     async fetch(req: Request, server: any) {
@@ -730,10 +782,21 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
       const proxyRes = await handleProxyRequest(req, proxyRules);
       if (proxyRes) return proxyRes;
 
-      if (pathname.startsWith('/assets/')) {
-        const devFile = path.join(devDir, pathname);
+      // Dev bundle assets: /assets/..., /chunk-..., or duplicate /assets/assets/
+      if (pathname.startsWith('/assets/') || pathname.startsWith('/chunk-')) {
+        const cleanPathname = pathname.replace(/^\/assets\/assets\//, '/assets/');
+        const devFile = path.join(devDir, cleanPathname);
         if (fs.existsSync(devFile) && !fs.statSync(devFile).isDirectory()) {
           return serveFile(devFile, { isDev: true });
+        }
+        const basename = path.basename(pathname);
+        const inAssets = path.join(devDir, 'assets', basename);
+        if (fs.existsSync(inAssets) && !fs.statSync(inAssets).isDirectory()) {
+          return serveFile(inAssets, { isDev: true });
+        }
+        const directInDev = path.join(devDir, basename);
+        if (fs.existsSync(directInDev) && !fs.statSync(directInDev).isDirectory()) {
+          return serveFile(directInDev, { isDev: true });
         }
       }
 
@@ -756,6 +819,22 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
         if (staticFile && staticFile !== indexHtmlPath) {
           return serveFile(staticFile, { isDev: true });
         }
+      }
+
+      // Fallback check directly in devDir
+      const anyDevFile = path.join(devDir, pathname);
+      if (fs.existsSync(anyDevFile) && !fs.statSync(anyDevFile).isDirectory()) {
+        return serveFile(anyDevFile, { isDev: true });
+      }
+
+      // SPA Fallback: only HTML / extensionless navigation routes should receive index.html.
+      // Static assets that were not found must return 404 to avoid MIME type errors in browsers.
+      const hasStaticExt = /\.(js|mjs|cjs|ts|tsx|jsx|css|json|wasm|png|jpe?g|gif|svg|ico|webp|woff2?|ttf|eot|otf|map|xlsx|pdf|txt)$/i.test(pathname);
+      if (hasStaticExt) {
+        return new Response(`Not found: ${pathname}`, {
+          status: 404,
+          headers: { 'Content-Type': 'text/plain' },
+        });
       }
 
       return new Response(getIndexHtml(), {
@@ -782,7 +861,7 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
         wsClients.delete(ws);
       },
     },
-  });
+  }, 'dev');
 
   const explicitHost = host !== '0.0.0.0';
 

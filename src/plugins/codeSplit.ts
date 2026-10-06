@@ -33,13 +33,13 @@ export interface CodeSplitPluginOptions {
  * Enables Bun's native `splitting: true` so that dynamic `import()` calls and
  * React.lazy() produce separate JS chunks, reducing initial bundle size.
  *
- * ### Netlify / production deployment
+ * ### Chunk import URLs
  *
  * Bun generates chunk import URLs as:
- *   `publicPath + chunkFilename`
- * where `publicPath` is automatically derived from the naming.entry directory
- * prefix (e.g. 'assets/' → publicPath '/assets/'). This ensures chunks are
- * fetched from the correct location on the CDN.
+ *   `publicPath + chunkRelativePath`
+ * Because chunk filenames already include the `assets/` subdirectory prefix
+ * (e.g. 'assets/chunk-[name]-[hash].[ext]'), `publicPath` defaults to `/` (or `base`).
+ * This ensures chunk URLs correctly resolve to `/assets/chunk-...` without duplicate prefixes.
  *
  * ### Why no manualChunks / virtual entries?
  *
