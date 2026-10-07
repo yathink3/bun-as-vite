@@ -9,6 +9,7 @@ export interface ParsedCLIArgs extends CLIOptions {
   minify: boolean;
   configFile: string | null;
   help: boolean;
+  watch: boolean;
 }
 
 /**
@@ -23,6 +24,7 @@ export function parseCLIArgs(argv: string[] = process.argv.slice(2)): ParsedCLIA
   let minify = true;
   let configFile: string | null = null;
   let help = false;
+  let watch: boolean | undefined = undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -58,6 +60,15 @@ export function parseCLIArgs(argv: string[] = process.argv.slice(2)): ParsedCLIA
       case '--no-minify':
         minify = false;
         break;
+      case '-w':
+      case '--watch':
+      case '--hot':
+        watch = true;
+        break;
+      case '--no-watch':
+      case '--no-hot':
+        watch = false;
+        break;
       case '--config':
       case '-c':
         configFile = argv[++i];
@@ -69,7 +80,12 @@ export function parseCLIArgs(argv: string[] = process.argv.slice(2)): ParsedCLIA
     }
   }
 
-  return { mode, port, host, proxy, outdir, minify, configFile, help };
+  // In dev mode, watch / hot is always enabled by default unless explicitly disabled with --no-watch
+  if (watch === undefined) {
+    watch = mode === 'dev' || process.execArgv.includes('--watch') || process.execArgv.includes('--hot');
+  }
+
+  return { mode, port, host, proxy, outdir, minify, configFile, help, watch };
 }
 
 export function printHelp(scriptName = 'bun-as-vite'): void {
@@ -91,6 +107,8 @@ export function printHelp(scriptName = 'bun-as-vite'): void {
   --proxy <url>        Upstream API proxy URL
   --outdir, --dir <d>  Output directory (default: build)
   --no-minify          Disable minification in production builds
+  -w, --watch, --hot   Enable watch mode and HMR (default: true in dev)
+  --no-watch           Disable watch mode and HMR
   --config, -c <file>  Path to bun-as-vite config file
   -h, --help           Show this help message
 `);

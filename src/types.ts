@@ -462,6 +462,10 @@ export interface CLIOptions {
    */
   configFile?: string | null;
   /**
+   * Enable watch mode and HMR.
+   */
+  watch?: boolean;
+  /**
    * Additional CLI arguments.
    */
   [key: string]: any;
@@ -483,6 +487,8 @@ export interface ResolvedConfig {
   port: number;
   /** Resolved server host */
   host: string;
+  /** Whether watch mode and HMR are enabled */
+  watch: boolean;
   /** Server options container */
   server: {
     port: number;

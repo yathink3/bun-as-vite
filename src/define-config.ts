@@ -16,12 +16,12 @@ import type {
   CLIOptions,
   ResolvedConfig,
   PluginContext,
+  CodeSplitGroup,
   BunAsViteConfigResult,
 } from './types';
 
 // ─── file extension sets ──────────────────────────────────────────────────────
 
-const CSS_EXTS = new Set(['.css', '.scss', '.sass', '.less']);
 const WATCH_EXTS = new Set([
   '.js',
   '.jsx',
@@ -217,42 +217,37 @@ function injectHmrClient(html: string): string {
         }).catch(function() {});
       }
 
-      window.__vite_plugin_react_preamble_installed__ = true;
-
       var wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
       var wsUrl = wsProtocol + '//' + location.host + '/__bav_hmr';
       var socket = null;
       var reconnectTimer = null;
+      var isReconnect = false;
 
       function connect() {
         try {
           socket = new WebSocket(wsUrl);
           socket.onopen = function() {
             if (reconnectTimer) { clearInterval(reconnectTimer); reconnectTimer = null; }
+            if (isReconnect) { location.reload(); }
           };
           socket.onmessage = function(event) {
             try {
               var payload = JSON.parse(event.data);
-              if (payload.type === 'full-reload') location.reload();
+              if (payload.type === 'reload' || payload.type === 'full-reload') location.reload();
             } catch (e) {
               if (event.data === 'reload') location.reload();
             }
           };
           socket.onclose = function() {
-            if (!reconnectTimer) reconnectTimer = setInterval(connect, 1500);
+            isReconnect = true;
+            if (!reconnectTimer) reconnectTimer = setInterval(connect, 1000);
           };
         } catch (e) {
-          if (!reconnectTimer) reconnectTimer = setInterval(connect, 1500);
+          isReconnect = true;
+          if (!reconnectTimer) reconnectTimer = setInterval(connect, 1000);
         }
       }
       connect();
-
-      try {
-        var es = new EventSource('/__bav_reload');
-        es.onmessage = function(e) {
-          if (e.data === 'reload') location.reload();
-        };
-      } catch (e) {}
     })();
   </script>`;
   if (/<\/body>/i.test(html)) {
@@ -285,6 +280,22 @@ function serveFile(filePath: string, { isPreview = false, isDev = false }: { isP
 }
 
 // ─── build / dev / preview runners ───────────────────────────────────────────
+
+function findAppEntryPoint(outputs: any[], groups: CodeSplitGroup[] = []): any {
+  const groupNames = new Set(groups.map((g) => g.name));
+  const isGroupEntry = (o: any): boolean => {
+    if (o.kind !== 'entry-point') return false;
+    const base = path.basename(o.path, path.extname(o.path));
+    const cleanName = base.replace(/-[a-zA-Z0-9]+$/, '');
+    if (groupNames.has(cleanName) || groupNames.has(base)) return true;
+    if (o.path.includes('.bun-chunks')) return true;
+    return [...groupNames].some((g) => cleanName === g || base.startsWith(g + '-'));
+  };
+  return (
+    outputs.find((o: any) => o.kind === 'entry-point' && !isGroupEntry(o)) ||
+    outputs.find((o: any) => o.kind === 'entry-point')
+  );
+}
 
 /**
  * Scans outDir recursively and prints a Vite-style file table:
@@ -453,28 +464,7 @@ export async function runBuild(resolvedConfig: ResolvedConfig): Promise<void> {
   const indexHtmlPath = path.resolve(root, 'index.html');
   if (fs.existsSync(indexHtmlPath)) {
     let html = fs.readFileSync(indexHtmlPath, 'utf-8');
-    const groupNames = new Set((resolvedConfig.codeSplitGroups || []).map((g) => g.name));
-
-    // Find the real app entry-point:
-    //  - must be kind === 'entry-point'
-    //  - must NOT be a codeSplitGroup named chunk (groupNames check)
-    //  - must NOT come from the temporary .bun-chunks virtual entry dir
-    //  - hash suffix uses uppercase hex (e.g. BK6Z54OP) — regex must be case-insensitive
-    const isGroupEntry = (o: any): boolean => {
-      if (o.kind !== 'entry-point') return false;
-      const base      = path.basename(o.path, path.extname(o.path));
-      const cleanName = base.replace(/-[a-zA-Z0-9]+$/, ''); // case-insensitive hash strip
-      if (groupNames.has(cleanName) || groupNames.has(base)) return true;
-      // Virtual entries written to .bun-chunks/ are always group entries
-      if (o.path.includes('.bun-chunks')) return true;
-      // If the base name (without hash) exactly matches a group name
-      if ([...groupNames].some(g => cleanName === g || base.startsWith(g + '-'))) return true;
-      return false;
-    };
-
-    const ep =
-      buildResult.outputs.find((o: any) => o.kind === 'entry-point' && !isGroupEntry(o)) ||
-      buildResult.outputs.find((o: any) => o.kind === 'entry-point');
+    const ep = findAppEntryPoint(buildResult.outputs, resolvedConfig.codeSplitGroups);
 
     const entryJs = ep ? '/' + path.relative(outDir, ep.path).replace(/\\/g, '/') : '/index.js';
     html = transformIndexHtml(html, { entryJs, buildTimeUnix, mode: 'production' });
@@ -633,6 +623,7 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
   const { root, srcDir, publicDir, outDir, define, plugins, bunPlugin } = resolvedConfig;
   const port = resolvedConfig.server?.port || resolvedConfig.port || 4545;
   const host = resolvedConfig.server?.host || resolvedConfig.host || '0.0.0.0';
+  const isWatch = Boolean(resolvedConfig.watch);
 
   const devDir = path.resolve(root, '.bun-dev');
   const indexHtmlPath = path.resolve(root, 'index.html');
@@ -641,24 +632,15 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
 
   let entryJs = '';
   let isBuilding = false;
-  const reloadSubscribers = new Set<(msg: string) => void>();
   const wsClients = new Set<any>();
 
   function broadcast(payload: any) {
-    const isString = typeof payload === 'string';
-    const json = isString ? payload : JSON.stringify(payload);
+    const json = typeof payload === 'string' ? payload : JSON.stringify(payload);
     for (const ws of wsClients) {
       try {
         ws.send(json);
       } catch {
         wsClients.delete(ws);
-      }
-    }
-    for (const send of reloadSubscribers) {
-      try {
-        send(isString ? payload : 'data: reload\n\n');
-      } catch {
-        reloadSubscribers.delete(send);
       }
     }
   }
@@ -696,22 +678,10 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
       });
 
       if (result.success) {
-        const groupNames = new Set((resolvedConfig.codeSplitGroups || []).map((g: any) => g.name));
-        const isGroupEntry = (o: any): boolean => {
-          if (o.kind !== 'entry-point') return false;
-          const base      = path.basename(o.path, path.extname(o.path));
-          const cleanName = base.replace(/-[a-zA-Z0-9]+$/, ''); // case-insensitive hash strip
-          if (groupNames.has(cleanName) || groupNames.has(base)) return true;
-          if (o.path.includes('.bun-chunks')) return true;
-          if ([...groupNames].some((g: string) => cleanName === g || base.startsWith(g + '-'))) return true;
-          return false;
-        };
-        const ep =
-          result.outputs.find((o: any) => o.kind === 'entry-point' && !isGroupEntry(o)) ||
-          result.outputs.find((o: any) => o.kind === 'entry-point');
+        const ep = findAppEntryPoint(result.outputs, resolvedConfig.codeSplitGroups);
         if (ep) entryJs = '/' + path.relative(devDir, ep.path);
         logBox(`[bun-as-vite:dev] Rebuilt (${entryJs}) in ${Date.now() - t0}ms`, 'success');
-        broadcast('data: reload\n\n');
+        if (isWatch) broadcast({ type: 'reload' });
       } else {
         logBox('[bun-as-vite:dev] Build failed:', 'error');
         for (const log of result.logs) console.error(log);
@@ -736,42 +706,27 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
     const buildTimeUnix = Math.floor(Date.now() / 1000).toString();
     let html = fs.readFileSync(indexHtmlPath, 'utf-8');
     html = transformIndexHtml(html, { entryJs, buildTimeUnix, mode: 'development' });
-    html = injectHmrClient(html);
+    if (isWatch) html = injectHmrClient(html);
     return html;
   }
 
   startBunServer({
     port,
     hostname: host,
+    development: isWatch ? { hmr: true } : false,
     async fetch(req: Request, server: any) {
       if (initialBuildResolve) await initialBuildPromise;
 
       const url = new URL(req.url);
       const pathname = url.pathname;
 
-      if (pathname === '/__bav_hmr' || (req.headers.get('upgrade') || '').toLowerCase() === 'websocket') {
+      if (isWatch && (pathname === '/__bav_hmr' || (req.headers.get('upgrade') || '').toLowerCase() === 'websocket')) {
         const upgraded = server.upgrade(req);
         if (upgraded) return undefined;
       }
 
-      if (pathname === '/__bav_reload') {
-        const { readable, writable } = new TransformStream();
-        const writer = writable.getWriter();
-        const encoder = new TextEncoder();
-        const send = (msg: string) => writer.write(encoder.encode(msg)).catch(() => {});
-        reloadSubscribers.add(send);
-        send('data: connected\n\n');
-        return new Response(readable, {
-          headers: {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            Connection: 'keep-alive',
-          },
-        });
-      }
-
-      if (pathname === '/' || pathname === '/index.html') {
-        return new Response(getIndexHtml(), {
+      const serveHtml = () =>
+        new Response(getIndexHtml(), {
           headers: {
             'Content-Type': 'text/html; charset=utf-8',
             'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
@@ -779,6 +734,9 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
             Expires: '0',
           },
         });
+
+      if (pathname === '/' || pathname === '/index.html') {
+        return serveHtml();
       }
 
       // Plugin hooks — plugins own their specific request handling
@@ -849,17 +807,11 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
         });
       }
 
-      return new Response(getIndexHtml(), {
-        headers: {
-          'Content-Type': 'text/html; charset=utf-8',
-          'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
-          Pragma: 'no-cache',
-          Expires: '0',
-        },
-      });
+      return serveHtml();
     },
     websocket: {
       open(ws: any) {
+        if (!isWatch) return;
         wsClients.add(ws);
         ws.send(JSON.stringify({ type: 'connected' }));
       },
@@ -883,34 +835,37 @@ export async function runDev(resolvedConfig: ResolvedConfig): Promise<void> {
 
   await rebuild();
 
-  let debounce: any = null;
-  const trigger = (_event: string, filename?: string) => {
-    if (!filename) {
+  if (isWatch) {
+    let debounce: any = null;
+    const trigger = (_event: string, filename?: string) => {
+      if (!filename) {
+        clearTimeout(debounce);
+        debounce = setTimeout(() => rebuild(), 150);
+        return;
+      }
+      const base = path.basename(filename);
+      if (base.startsWith('.') || base.startsWith('~') || base.endsWith('.tmp') || base.endsWith('~')) return;
+      const ext = path.extname(filename).toLowerCase();
+      if (ext && !WATCH_EXTS.has(ext)) return;
       clearTimeout(debounce);
       debounce = setTimeout(() => rebuild(), 150);
-      return;
-    }
-    const base = path.basename(filename);
-    if (base.startsWith('.') || base.startsWith('~') || base.endsWith('.tmp') || base.endsWith('~')) return;
-    const ext = path.extname(filename).toLowerCase();
-    if (ext && !WATCH_EXTS.has(ext)) return;
-    clearTimeout(debounce);
-    debounce = setTimeout(() => rebuild(), 150);
-  };
+    };
 
-  try {
-    fs.watch(srcDir, { recursive: true }, trigger as any);
-  } catch (err: any) {
-    logBox(`[bun-as-vite:dev] Could not watch srcDir recursively: ${err.message}`, 'warn');
+    try {
+      fs.watch(srcDir, { recursive: true }, trigger as any);
+    } catch (err: any) {
+      logBox(`[bun-as-vite:dev] Could not watch srcDir recursively: ${err.message}`, 'warn');
+    }
   }
 
   const explicitHost = host !== '0.0.0.0';
 
   console.log(`\n${colors.green('🚀  Bun Dev Server:')} ${colors.cyan(`http://localhost:${port}/`)}`);
+  const hmrStatus = isWatch ? 'HMR: WebSocket enabled' : 'HMR: disabled (--no-watch)';
   if (explicitHost) {
-    logStep('dev', 'Host:', host, '|', 'HMR: WebSocket enabled');
+    logStep('dev', 'Host:', host, '|', hmrStatus);
   } else {
-    logStep('dev', 'HMR: WebSocket enabled');
+    logStep('dev', hmrStatus);
   }
 }
 
@@ -1068,6 +1023,16 @@ export function defineConfig(configOrFactory: ConfigFactory | UserConfig): BunAs
       ...(rawConfig.bunBuild || {}),
     };
 
+    const isWatch =
+      cliOpts.watch !== false &&
+      (cliOpts.watch === true ||
+        mode === 'development' ||
+        process.argv.includes('--watch') ||
+        process.argv.includes('-w') ||
+        process.argv.includes('--hot') ||
+        (process.execArgv && (process.execArgv.includes('--watch') || process.execArgv.includes('--hot'))) ||
+        rawServer.watch !== false);
+
     return {
       root,
       srcDir,
@@ -1075,6 +1040,7 @@ export function defineConfig(configOrFactory: ConfigFactory | UserConfig): BunAs
       outDir,
       port: server.port,
       host: server.host,
+      watch: isWatch,
       server,
       proxyRules,
       rewrites,
